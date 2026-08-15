@@ -1,0 +1,76 @@
+/* Hallmark · genre: editorial · macrostructure: Workbench · design-system: design.md · designed-as-app */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-paper: #F4F6FB;
+  --color-card: #FFFFFF;
+  --color-ink: #17263F;
+  --color-rule: #E2E8F2;
+  --color-brand-300: #92A8DA;
+  --color-brand-500: #2C4D90;
+  --color-brand-600: #26407A;
+  --color-leaf-300: #7BC497;
+  --color-leaf-500: #208D49;
+  --color-slate-300: #C6CFDE;
+  --color-slate-400: #9AA8BE;
+  --color-slate-100: #EEF2F7;
+  --color-amber-500: #F59E0B;
+  --color-rose-500: #F43F5E;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  @apply bg-paper text-ink font-sans antialiased;
+}
+
+::selection {
+  background: var(--color-brand-500);
+  color: #FFFFFF;
+}
+
+.focus-ring {
+  @apply focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 focus:ring-offset-paper;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: #C6CFDE;
+  border-radius: 8px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #9AA8BE;
+}
+
+@keyframes fadeInDown {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
