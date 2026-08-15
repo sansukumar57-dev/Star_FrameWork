@@ -6,5 +6,7 @@ module.exports = {
   Submission: require('./Submission'),
   Notification: require('./Notification'),
   AuditLog: require('./AuditLog'),
-  SystemSetting: require('./SystemSetting')
+  SystemSetting: require('./SystemSetting'),
+  Badge: require('./Badge'),
+  UserStreak: require('./UserStreak')
 };

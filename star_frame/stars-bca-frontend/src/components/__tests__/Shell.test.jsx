@@ -1,14 +1,17 @@
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
+import { ThemeProvider } from '../../utils/theme.jsx'
 import Shell from '../Shell.jsx'
 
 const renderShell = (props) =>
   render(
     <MemoryRouter>
-      <Shell role="faculty" userName="Priya" department="CS" {...props}>
-        <p>page content</p>
-      </Shell>
+      <ThemeProvider>
+        <Shell role="faculty" userName="Priya" department="CS" {...props}>
+          <p>page content</p>
+        </Shell>
+      </ThemeProvider>
     </MemoryRouter>
   )
 

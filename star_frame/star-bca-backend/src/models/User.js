@@ -30,6 +30,27 @@ const userSchema = new mongoose.Schema({
   academicYear: { type: String, trim: true, default: '' },
   status: { type: String, enum: ['Active', 'Inactive'], default: 'Active' },
   semesterLocked: { type: Boolean, default: false },
+  attendancePercentage: { type: Number, default: null },
+  semesterPercentage: { type: Number, default: null },
+  libraryUsage: { type: Number, default: null },
+  // Gamification fields
+  totalPoints: { type: Number, default: 0 },
+  currentStreak: { type: Number, default: 0 },
+  longestStreak: { type: Number, default: 0 },
+  totalSubmissions: { type: Number, default: 0 },
+  approvedSubmissions: { type: Number, default: 0 },
+  // Points ledger — individual transaction history
+  pointsLedger: [{
+    submissionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Submission' },
+    activityName: { type: String, default: '' },
+    vertical: { type: String, default: '' },
+    points: { type: Number, default: 0 },
+    type: { type: String, enum: ['earned', 'adjusted', 'removed'], default: 'earned' },
+    note: { type: String, default: '' },
+    date: { type: Date, default: Date.now },
+  }],
+  // Bookmarked activities
+  bookmarks: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Activity' }],
 }, { timestamps: true });
 
 userSchema.index({ role: 1, accountType: 1, schoolId: 1, departmentId: 1 });

@@ -46,15 +46,35 @@ export function StatusBadge({ status }) {
   )
 }
 
-export function ProgressRing({ percent = 0, size: _size = 88, stroke: _stroke = 9, color = 'var(--color-brand-500)' }) {
-  const clamped = Math.min(100, Math.max(0, Math.round(percent)))
+export function ProgressRing({ percent = 0, size: _size = 88, stroke: _stroke = 9, color = 'var(--color-brand-500)', animate = true }) {
+  const target = Math.min(100, Math.max(0, Math.round(percent)))
+  const [display, setDisplay] = React.useState(animate ? 0 : target)
+
+  React.useEffect(() => {
+    if (!animate) {
+      setDisplay(target)
+      return undefined
+    }
+    let raf
+    const start = performance.now()
+    const duration = 700
+    const tick = (now) => {
+      const elapsed = Math.min(1, (now - start) / duration)
+      const eased = 1 - Math.pow(1 - elapsed, 3)
+      setDisplay(Math.round(target * eased))
+      if (elapsed < 1) raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [target, animate])
+
   return (
     <div className="w-full">
-      <p className="tabular font-display text-4xl font-semibold leading-none text-ink">{clamped}%</p>
+      <p className="tabular font-display text-4xl font-semibold leading-none text-ink">{display}%</p>
       <div className="mt-2 h-1 w-full overflow-hidden rounded-full bg-slate-200">
         <div
           className="h-full rounded-full transition-all"
-          style={{ width: `${clamped}%`, backgroundColor: color }}
+          style={{ width: `${display}%`, backgroundColor: color }}
         />
       </div>
     </div>

@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react'
+import * as XLSX from 'xlsx'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell } from 'recharts'
 import Shell from '../components/Shell.jsx'
 import { StatCard, StatusBadge, Modal, Button, PageHeader, Card, Toast, EmptyState, LoadingState, Field, Input, Textarea, Select, ConfirmDialog } from '../components/UI.jsx'
-import { getTeacherDashboard, getTeacherSubmissions, approveSubmission, rejectSubmission, getSubmissionFileBlob, runAiReview, applyAiReview, bulkApproveSubmissions, bulkRejectSubmissions, exportTeacherSubmissions } from '../utils/api.js'
+import CommentThread from '../components/CommentThread.jsx'
+import { getTeacherDashboard, getTeacherSubmissions, getTeacherStudents, updateTeacherStudentRecords, bulkUpdateTeacherStudentRecords, approveSubmission, rejectSubmission, getSubmissionFileBlob, runAiReview, applyAiReview, bulkApproveSubmissions, bulkRejectSubmissions, exportTeacherSubmissions, downloadTeacherReport, bulkImportStudents, getAiClearedCount, autoApproveAiCleared } from '../utils/api.js'
 
 /* Hallmark · genre: editorial · macrostructure: Workbench · design-system: design.md · designed-as-app */
 
@@ -53,7 +55,7 @@ const STATUS_TABS = [
 
 export default function FacultyDashboard() {
   const [submissions, setSubmissions] = useState([])
-  const [stats, setStats] = useState({ pending: 0, approved: 0, rejected: 0, totalStudents: 0, totalPointsAwarded: 0 })
+  const [stats, setStats] = useState({ pending: 0, approved: 0, rejected: 0, totalStudents: 0, totalPointsAwarded: 0, topStudents: [] })
   const [reviewing, setReviewing] = useState(null)
   const [score, setScore] = useState('')
   const [remarks, setRemarks] = useState('')
@@ -68,16 +70,25 @@ export default function FacultyDashboard() {
   const [bulkRemarks, setBulkRemarks] = useState('')
   const [exporting, setExporting] = useState(false)
   const [statusFilter, setStatusFilter] = useState('Pending')
+  const [search, setSearch] = useState('')
+  const [records, setRecords] = useState([])
+  const [recordsSearch, setRecordsSearch] = useState('')
+  const [editingStudent, setEditingStudent] = useState(null)
+  const [recordForm, setRecordForm] = useState({ attendancePercentage: '', semesterPercentage: '', libraryUsage: '' })
+  const [savingRecords, setSavingRecords] = useState(false)
+  const [bulkUploading, setBulkUploading] = useState(false)
+  const [aiClearedCount, setAiClearedCount] = useState(0)
+  const [aiAutoApproving, setAiAutoApproving] = useState(false)
 
   const currentUser = React.useMemo(() => {
     try { return JSON.parse(localStorage.getItem('stars_user') || '{}') } catch { return {} }
   }, [])
 
   const loadCurrent = useCallback(async () => {
-    const [submissionsRes, dashboardRes] = await Promise.all([getTeacherSubmissions(50, statusFilter), getTeacherDashboard()])
+    const [submissionsRes, dashboardRes] = await Promise.all([getTeacherSubmissions(50, statusFilter, search), getTeacherDashboard()])
     setSubmissions(submissionsRes.data.submissions || [])
     setStats(dashboardRes.data)
-  }, [statusFilter])
+  }, [statusFilter, search])
 
   useEffect(() => {
     let active = true
@@ -85,7 +96,30 @@ export default function FacultyDashboard() {
       .catch((error) => { if (active) setToast({ message: error.message || 'Unable to load submissions', tone: 'error' }) })
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false }
-  }, [statusFilter, loadCurrent])
+  }, [statusFilter, search, loadCurrent])
+
+  const loadAiClearedCount = useCallback(async () => {
+    try {
+      const data = await getAiClearedCount()
+      setAiClearedCount(data.data?.count || 0)
+    } catch {
+      setAiClearedCount(0)
+    }
+  }, [])
+
+  const loadRecords = useCallback(async () => {
+    try {
+      const data = await getTeacherStudents()
+      setRecords(data.data?.students || [])
+    } catch (error) {
+      setToast({ message: error.message || 'Unable to load student records', tone: 'error' })
+    }
+  }, [])
+
+  useEffect(() => {
+    loadRecords()
+    loadAiClearedCount().catch(() => {})
+  }, [loadAiClearedCount, loadRecords])
 
   const chartData = [
     { name: 'Pending', pct: stats.pending, fill: 'var(--color-amber-500)' },
@@ -176,6 +210,165 @@ export default function FacultyDashboard() {
     }
   }
 
+  async function handleReport() {
+    setExporting(true)
+    try {
+      await downloadTeacherReport()
+    } catch (error) {
+      setToast({ message: error.message || 'Unable to download report', tone: 'error' })
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  async function handleAutoApproveAi() {
+    if (aiClearedCount === 0) {
+      setToast({ message: 'No AI-cleared submissions are waiting for auto-approval.', tone: 'info' })
+      return
+    }
+
+    setAiAutoApproving(true)
+    try {
+      const result = await autoApproveAiCleared()
+      const approved = result.data?.approved || 0
+      setAiClearedCount(0)
+      setToast({ message: approved ? `${approved} AI-cleared submission${approved === 1 ? '' : 's'} approved.` : 'No AI-cleared submissions were approved.', tone: approved ? 'success' : 'info' })
+      await loadCurrent()
+      await loadAiClearedCount()
+    } catch (error) {
+      setToast({ message: error.message || 'AI auto-approval failed', tone: 'error' })
+    } finally {
+      setAiAutoApproving(false)
+    }
+  }
+
+  const filteredRecords = useMemo(() => {
+    const term = recordsSearch.trim().toLowerCase()
+    if (!term) return records
+    return records.filter((student) => {
+      const searchable = `${student.name || ''} ${student.registerNumber || ''} ${student.section || ''}`.toLowerCase()
+      return searchable.includes(term)
+    })
+  }, [records, recordsSearch])
+
+  function openRecordEditor(student) {
+    setEditingStudent(student)
+    setRecordForm({
+      attendancePercentage: student.attendancePercentage ?? '',
+      semesterPercentage: student.semesterPercentage ?? '',
+      libraryUsage: student.libraryUsage ?? '',
+    })
+  }
+
+  async function saveStudentRecords() {
+    if (!editingStudent) return
+    setSavingRecords(true)
+    try {
+      await updateTeacherStudentRecords(editingStudent._id, recordForm)
+      setRecords((prev) => prev.map((student) => (
+        student._id === editingStudent._id
+          ? {
+              ...student,
+              attendancePercentage: recordForm.attendancePercentage === '' ? null : Number(recordForm.attendancePercentage),
+              semesterPercentage: recordForm.semesterPercentage === '' ? null : Number(recordForm.semesterPercentage),
+              libraryUsage: recordForm.libraryUsage === '' ? null : Number(recordForm.libraryUsage),
+            }
+          : student
+      )))
+      setEditingStudent(null)
+      setToast({ message: `${editingStudent.name}'s academic records updated.`, tone: 'success' })
+    } catch (error) {
+      setToast({ message: error.message || 'Unable to save student records', tone: 'error' })
+    } finally {
+      setSavingRecords(false)
+    }
+  }
+
+  async function handleRecordsBulkUpload(event) {
+    const file = event.target.files?.[0]
+    if (!file) return
+    setBulkUploading(true)
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      const res = await bulkUpdateTeacherStudentRecords(formData)
+      setToast({ message: res.message || 'Student records updated from the uploaded file.', tone: 'success' })
+      loadRecords()
+    } catch (error) {
+      setToast({ message: error.message || 'Bulk record upload failed', tone: 'error' })
+    } finally {
+      setBulkUploading(false)
+      event.target.value = ''
+    }
+  }
+
+  async function handleStudentImport(event) {
+    const file = event.target.files?.[0]
+    if (!file) return
+    setBulkUploading(true)
+    try {
+      const csvData = await file.text()
+      const res = await bulkImportStudents(csvData, currentUser.departmentId || '', '')
+      const data = res.data || {}
+      setToast({
+        message: `Imported ${data.successful || 0} students (${data.failed || 0} failed).`,
+        tone: data.failed ? 'warning' : 'success',
+      })
+      loadRecords()
+      loadCurrent().catch(() => {})
+    } catch (error) {
+      setToast({ message: error.message || 'Bulk student import failed', tone: 'error' })
+    } finally {
+      setBulkUploading(false)
+      event.target.value = ''
+    }
+  }
+
+  async function handleStudentExcelImport(event) {
+    const file = event.target.files?.[0]
+    if (!file) return
+    setBulkUploading(true)
+    try {
+      const data = await file.arrayBuffer()
+      const workbook = XLSX.read(data, { type: 'array' })
+      const sheet = workbook.Sheets[workbook.SheetNames[0]]
+      if (!sheet) throw new Error('The workbook has no sheets.')
+
+      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' })
+      if (rows.length < 2) throw new Error('The sheet must have a header row and at least one student row.')
+
+      const indexOf = (name) => {
+        const header = rows[0].map((cell) => String(cell).trim().toLowerCase())
+        const col = header.findIndex((cell) => cell.includes(name))
+        return col === -1 ? null : col
+      }
+      const iName = indexOf('name')
+      const iEmail = indexOf('email')
+      const iRegNo = indexOf('register') ?? indexOf('reg no')
+      if (iName === null || iEmail === null || iRegNo === null) {
+        throw new Error('Expected columns: name, email, regNo (header row required).')
+      }
+
+      const lines = rows.slice(1)
+        .map((row) => [row[iName], row[iEmail], row[iRegNo], row[4], row[5]].map((v) => String(v ?? '').trim()))
+        .filter((row) => row[0] || row[1] || row[2])
+
+      const res = await bulkImportStudents(lines.map((r) => r.join(',')).join('\n'), currentUser.departmentId || '', '')
+      const result = res.data || {}
+      setToast({
+        message: `Imported ${result.successful || 0} students (${result.failed || 0} failed).`,
+        tone: result.failed ? 'warning' : 'success',
+      })
+      loadRecords()
+      loadCurrent().catch(() => {})
+    } catch (error) {
+      setToast({ message: error.message || 'Excel student import failed', tone: 'error' })
+    } finally {
+      setBulkUploading(false)
+      event.target.value = ''
+    }
+  }
+
   function openReview(sub) {
     const studentId = sub?.studentId?._id || sub?.studentId
     const siblingReviews = submissions.filter((entry) => {
@@ -226,6 +419,20 @@ export default function FacultyDashboard() {
     } catch (error) {
       setToast({ message: error.message || 'Unable to open evidence file', tone: 'error' })
     }
+  }
+
+  const AiRowBadge = ({ sub }) => {
+    const review = sub?.aiReview
+    if (!review) return null
+    return (
+      <span
+        title={`AI: ${review.recommendation} · ${review.suggestedPoints} SP · ${review.confidence}% confidence`}
+        className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold ${AI_RECOMMENDATION_TONES[review.recommendation] || 'bg-slate-100 text-slate-600'}`}
+      >
+        <span className="h-1 w-1 rounded-full bg-current" />
+        AI {review.recommendation}
+      </span>
+    )
   }
 
   const AI_RECOMMENDATION_TONES = {
@@ -279,16 +486,21 @@ export default function FacultyDashboard() {
         title="Faculty Review Dashboard"
         subtitle="Verify evidence, score submissions, and keep student STAR records up to date."
         actions={
-          <Button variant="outline" onClick={handleExport} loading={exporting}>⬇ Export Excel</Button>
+          <>
+            <Button variant="success" onClick={handleAutoApproveAi} loading={aiAutoApproving} disabled={aiClearedCount === 0}>⚡ Auto-approve AI</Button>
+            <Button variant="outline" onClick={handleReport} loading={exporting}>⬇ PDF Report</Button>
+            <Button variant="outline" onClick={handleExport} loading={exporting}>⬇ Export Excel</Button>
+          </>
         }
       />
 
       {toast && <Toast message={toast.message} tone={toast.tone} onDismiss={() => setToast(null)} />}
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-8">
         <StatCard label="Pending Reviews" value={stats.pending} sub="Awaiting your action" accent="amber" />
         <StatCard label="Approved Tasks" value={stats.approved} sub="This term" accent="leaf" />
         <StatCard label="Rejected Tasks" value={stats.rejected} sub="Needs resubmission" accent="rose" />
+        <StatCard label="AI Cleared" value={aiClearedCount} sub="High-confidence approvals" accent="brand" />
         <StatCard label="Total Students" value={stats.totalStudents} sub="Registered learners" accent="brand" />
       </div>
 
@@ -313,7 +525,15 @@ export default function FacultyDashboard() {
               </button>
             ))}
           </div>
-          <h2 className="font-display text-lg font-semibold text-ink mb-3">Submissions</h2>
+          <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <h2 className="font-display text-lg font-semibold text-ink">Submissions</h2>
+            <Input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search student name or register number"
+              className="!w-full md:!w-auto md:min-w-[240px] !bg-card !border-rule"
+            />
+          </div>
           {statusFilter === 'Pending' && selectedIds.length > 0 && (
             <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-brand-200 bg-brand-50/70 px-4 py-3">
               <p className="text-sm font-medium text-ink">{selectedIds.length} selected</p>
@@ -402,7 +622,10 @@ export default function FacultyDashboard() {
                             {isMultiSubmission ? (
                               <span className="text-xs text-slate-400">Grouped</span>
                             ) : (
-                              <StatusBadge status={group.submissions[0]?.status} />
+                              <div className="flex items-center gap-2">
+                                <StatusBadge status={group.submissions[0]?.status} />
+                                <AiRowBadge sub={group.submissions[0]} />
+                              </div>
                             )}
                           </td>
                           <td className="px-5 py-3">
@@ -443,7 +666,12 @@ export default function FacultyDashboard() {
                               </div>
                             </td>
                             <td className="px-5 py-3 text-slate-600 max-w-[220px] truncate">{submission.activityId?.activityName || 'Activity'}</td>
-                            <td className="px-5 py-3"><StatusBadge status={submission.status} /></td>
+                            <td className="px-5 py-3">
+                              <div className="flex items-center gap-2">
+                                <StatusBadge status={submission.status} />
+                                <AiRowBadge sub={submission} />
+                              </div>
+                            </td>
                             <td className="px-5 py-3">
                               <span className="flex items-center gap-2">
                                 <span className="tabular font-medium text-slate-600">{pointsFor(submission)} pts</span>
@@ -487,8 +715,127 @@ export default function FacultyDashboard() {
             </ResponsiveContainer>
           </Card>
           <p className="text-xs text-slate-400 mt-2">Submissions grouped by review status.</p>
+
+          <h2 className="font-display text-lg font-semibold text-ink mb-3 mt-8">Top Students</h2>
+          <Card className="p-5">
+            <p className="text-sm text-slate-400 mb-3">Ranked by approved STAR points.</p>
+            {(stats.topStudents || []).length > 0 ? (
+              <div className="space-y-2">
+                {stats.topStudents.map((student, index) => (
+                  <div key={student._id} className="flex items-center justify-between rounded-md border border-rule px-3 py-2.5 text-sm">
+                    <div className="flex min-w-0 items-center gap-2.5">
+                      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-ink font-mono text-[10px] font-medium text-paper">{index + 1}</span>
+                      <div className="min-w-0">
+                        <p className="truncate font-medium text-ink">{student.name}</p>
+                        <p className="font-mono text-[11px] text-slate-400">{student.registerNumber || student.section || ''}</p>
+                      </div>
+                    </div>
+                    <span className="shrink-0 font-display text-lg font-semibold text-ink">{student.totalPoints || 0}<span className="text-xs font-normal text-slate-400"> pts</span></span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <EmptyState icon="★" title="No top students yet" description="Students appear here as they earn approved STAR points." />
+            )}
+          </Card>
         </div>
       </div>
+
+      <Card className="p-5 mt-8">
+        <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between mb-4">
+          <div>
+            <h2 className="font-display text-lg font-semibold text-ink">Student Academic Records</h2>
+            <p className="text-sm text-slate-400 mt-1">Record attendance %, semester %, and library hours for your assigned students.</p>
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <Input
+              value={recordsSearch}
+              onChange={(e) => setRecordsSearch(e.target.value)}
+              placeholder="Search students"
+              className="!w-full sm:!w-auto sm:min-w-[200px] !bg-card !border-rule"
+            />
+            <input id="records-excel-input" type="file" accept=".xlsx,.xls" className="hidden" onChange={handleRecordsBulkUpload} />
+            <Button variant="outline" loading={bulkUploading} onClick={() => document.getElementById('records-excel-input')?.click()}>
+              {bulkUploading ? 'Uploading…' : '⬇ Upload Excel'}
+            </Button>
+            <input id="students-csv-input" type="file" accept=".csv,.txt" className="hidden" onChange={handleStudentImport} />
+            <Button variant="outline" loading={bulkUploading} onClick={() => document.getElementById('students-csv-input')?.click()}>
+              {bulkUploading ? 'Importing…' : '⬆ Import Students (CSV)'}
+            </Button>
+            <input id="students-excel-input" type="file" accept=".xlsx,.xls" className="hidden" onChange={handleStudentExcelImport} />
+            <Button variant="outline" loading={bulkUploading} onClick={() => document.getElementById('students-excel-input')?.click()}>
+              {bulkUploading ? 'Importing…' : '⬆ Import Students (Excel)'}
+            </Button>
+          </div>
+        </div>
+
+        {filteredRecords.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-paper/60 text-slate-400 text-[11px] uppercase tracking-[0.14em]">
+                <tr>
+                  <th className="text-left font-medium px-3 py-2.5">Student</th>
+                  <th className="text-left font-medium px-3 py-2.5">Register No</th>
+                  <th className="text-left font-medium px-3 py-2.5">Attendance %</th>
+                  <th className="text-left font-medium px-3 py-2.5">Semester %</th>
+                  <th className="text-left font-medium px-3 py-2.5">Library (hrs)</th>
+                  <th className="text-left font-medium px-3 py-2.5">STAR Points</th>
+                  <th className="text-right font-medium px-3 py-2.5">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredRecords.map((student) => (
+                  <tr key={student._id} className="border-b border-rule transition-colors hover:bg-paper/60">
+                    <td className="px-3 py-2.5">
+                      <div className="flex items-center gap-2.5">
+                        <span className="h-8 w-8 shrink-0 rounded-full bg-ink font-display text-xs font-semibold text-paper flex items-center justify-center">{student.name?.[0] || '?'}</span>
+                        <p className="font-medium text-ink">{student.name}</p>
+                      </div>
+                    </td>
+                    <td className="px-3 py-2.5 font-mono text-xs text-slate-500">{student.registerNumber || '—'}</td>
+                    <td className="px-3 py-2.5 text-slate-600">{student.attendancePercentage ?? '—'}{student.attendancePercentage != null ? '%' : ''}</td>
+                    <td className="px-3 py-2.5 text-slate-600">{student.semesterPercentage ?? '—'}{student.semesterPercentage != null ? '%' : ''}</td>
+                    <td className="px-3 py-2.5 text-slate-600">{student.libraryUsage ?? '—'}</td>
+                    <td className="px-3 py-2.5 font-mono text-xs text-slate-600">{student.totalPoints || 0} pts</td>
+                    <td className="px-3 py-2.5 text-right">
+                      <Button size="sm" variant="outline" onClick={() => openRecordEditor(student)}>Edit</Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <EmptyState icon="▤" title="No students found" description={records.length ? 'No students match your search.' : 'Assigned students will appear here once they are linked to you.'} />
+        )}
+      </Card>
+
+      <Modal
+        open={!!editingStudent}
+        onClose={() => setEditingStudent(null)}
+        title={`Academic records — ${editingStudent?.name || ''}`}
+        subtitle={editingStudent?.registerNumber || ''}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setEditingStudent(null)} disabled={savingRecords}>Cancel</Button>
+            <Button onClick={saveStudentRecords} loading={savingRecords}>Save Records</Button>
+          </>
+        }
+      >
+        {editingStudent && (
+          <div className="grid gap-4 sm:grid-cols-3">
+            <Field label="Attendance %">
+              <Input type="number" min="0" max="100" value={recordForm.attendancePercentage} onChange={(e) => setRecordForm({ ...recordForm, attendancePercentage: e.target.value })} placeholder="e.g. 92" />
+            </Field>
+            <Field label="Semester %">
+              <Input type="number" min="0" max="100" value={recordForm.semesterPercentage} onChange={(e) => setRecordForm({ ...recordForm, semesterPercentage: e.target.value })} placeholder="e.g. 85" />
+            </Field>
+            <Field label="Library (hours)">
+              <Input type="number" min="0" value={recordForm.libraryUsage} onChange={(e) => setRecordForm({ ...recordForm, libraryUsage: e.target.value })} placeholder="e.g. 15" />
+            </Field>
+          </div>
+        )}
+      </Modal>
 
       <Modal
         open={!!reviewing}
@@ -611,6 +958,8 @@ export default function FacultyDashboard() {
                 placeholder="Add feedback for the student..."
               />
             </Field>
+
+            <CommentThread submissionId={reviewing?._id} currentUser={currentUser} />
           </div>
         )}
       </Modal>

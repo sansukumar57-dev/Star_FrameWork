@@ -1,6 +1,8 @@
-import React, { Suspense, lazy } from 'react'
+import React, { Suspense, lazy, useEffect, useState } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { Spinner } from './components/UI.jsx'
+import ErrorBoundary from './components/ErrorBoundary.jsx'
+import LoadingScreen from './components/LoadingScreen.jsx'
 
 const Login = lazy(() => import('./pages/Login.jsx'))
 const StudentDashboard = lazy(() => import('./pages/StudentDashboard.jsx'))
@@ -25,9 +27,20 @@ function PageFallback() {
 }
 
 export default function App() {
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    import('./pages/Login.jsx').catch(() => {})
+  }, [])
+
+  if (loading) {
+    return <LoadingScreen onComplete={() => setLoading(false)} />
+  }
+
   return (
-    <Suspense fallback={<PageFallback />}>
-      <Routes>
+    <ErrorBoundary>
+      <Suspense fallback={<PageFallback />}>
+        <Routes>
         <Route path="/" element={<Login />} />
         <Route path="/student/*" element={<StudentDashboard />} />
         <Route path="/faculty/*" element={<FacultyDashboard />} />
@@ -40,6 +53,7 @@ export default function App() {
         <Route path="/principal/academic-year" element={<AcademicYearPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
-    </Suspense>
+      </Suspense>
+    </ErrorBoundary>
   )
 }

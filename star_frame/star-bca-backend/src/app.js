@@ -10,6 +10,11 @@ const teacherRoutes = require('./routes/teacherRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const hodRoutes = require('./routes/hodRoutes');
 const submissionRoutes = require('./routes/submissionRoutes');
+const gamificationRoutes = require('./routes/gamificationRoutes');
+const bulkOperationsRoutes = require('./routes/bulkOperationsRoutes');
+const notificationRoutes = require('./routes/notificationRoutes');
+const adminAiRoutes = require('./routes/adminAiRoutes');
+const searchRoutes = require('./routes/searchRoutes');
 const errorMiddleware = require('./middleware/errorMiddleware');
 
 dotenv.config();
@@ -29,9 +34,14 @@ app.get('/health', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/student', studentRoutes);
 app.use('/api/teacher', teacherRoutes);
+app.use('/api/admin/ai', adminAiRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/hod', hodRoutes);
 app.use('/api/submissions', submissionRoutes);
+app.use('/api/gamification', gamificationRoutes);
+app.use('/api/bulk', bulkOperationsRoutes);
+app.use('/api/notifications', notificationRoutes);
+app.use('/api/search', searchRoutes);
 
 app.use(errorMiddleware);
 

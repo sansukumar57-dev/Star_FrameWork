@@ -11,6 +11,7 @@ const { normalizeBulkRow, isEmptyRow, getRequiredValidationErrors, getValue } = 
 const { validateDepartmentPayload } = require('../utils/deanScope');
 const { sendSuccess, sendError } = require('../utils/response');
 const { logAudit } = require('../utils/audit');
+const { generateDepartmentSummary } = require('../services/departmentInsightsService');
 
 const buildUserResponse = (user) => {
   const safeUser = user.toObject ? user.toObject() : { ...user };
@@ -403,6 +404,100 @@ const getAnalytics = async (req, res, next) => {
   }
 };
 
+const buildDepartmentMetrics = async (departmentId) => {
+  const students = await User.find({ role: 'student', departmentId }).select('_id name regNo registerNumber year batch semesterBatch').lean();
+  const studentIds = students.map((student) => student._id);
+  const totalPoints = await Submission.aggregate([
+    { $match: { status: 'Approved', studentId: { $in: studentIds } } },
+    { $group: { _id: null, total: { $sum: '$pointsAwarded' }, submissions: { $sum: 1 } } },
+  ]);
+  const pointResults = await Submission.aggregate([
+    { $match: { status: 'Approved', studentId: { $in: studentIds } } },
+    { $group: { _id: '$studentId', totalPoints: { $sum: '$pointsAwarded' } } },
+  ]);
+  const pointMap = new Map(pointResults.map((entry) => [entry._id.toString(), entry.totalPoints || 0]));
+  const topStudents = students
+    .map((student) => ({
+      name: student.name,
+      registerNumber: student.registerNumber || student.regNo || '',
+      totalPoints: pointMap.get(student._id.toString()) || 0,
+    }))
+    .sort((a, b) => (b.totalPoints || 0) - (a.totalPoints || 0))
+    .slice(0, 5);
+  return {
+    studentCount: studentIds.length,
+    totalPoints: totalPoints[0]?.total || 0,
+    submissionCount: totalPoints[0]?.submissions || 0,
+    averageScore: studentIds.length ? Math.round((totalPoints[0]?.total || 0) / studentIds.length) : 0,
+    topStudents,
+  };
+};
+
+const exportAdminReport = async (req, res, next) => {
+  try {
+    let sections = [];
+    if (req.user?.accountType === 'dean' && req.user.schoolId) {
+      const school = await School.findById(req.user.schoolId).select('name').lean().catch(() => null);
+      const departments = await Department.find({ schoolId: req.user.schoolId, status: 'Active' }).select('name').sort({ name: 1 }).lean();
+      sections = await Promise.all(departments.map(async (department) => {
+        const metrics = await buildDepartmentMetrics(department._id);
+        return { title: department.name, metrics };
+      }));
+      sections.unshift({ header: { subtitle: `${school?.name || 'Dean'} · School-wide performance report` } });
+    } else if (req.user?.accountType === 'hod') {
+      const department = await Department.findById(req.user.departmentId).select('name').lean().catch(() => null);
+      sections = [{ title: 'Department', metrics: await buildDepartmentMetrics(req.user.departmentId) }];
+      sections.unshift({ header: { subtitle: `${department?.name || 'HOD'} · Department performance report` } });
+    } else {
+      const departments = await Department.find({ status: 'Active' }).select('name').sort({ name: 1 }).lean();
+      sections = await Promise.all(departments.map(async (department) => {
+        const metrics = await buildDepartmentMetrics(department._id);
+        return { title: department.name, metrics };
+      }));
+      sections.unshift({ header: { subtitle: 'All departments · Institution-wide performance report' } });
+    }
+
+    const PDFDocument = require('pdfkit');
+    const doc = new PDFDocument({ size: 'A4', margin: 48 });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename="institution-report.pdf"');
+    doc.pipe(res);
+
+    doc.fontSize(20).fillColor('#111827').text('STARS-BCA Performance Report');
+    doc.fontSize(9).fillColor('#6b7280').text(`KPR College of Arts and Science · Generated ${new Date().toLocaleDateString('en-IN')}`);
+    if (sections[0]?.header?.subtitle) {
+      doc.moveDown(0.2);
+      doc.fontSize(10).fillColor('#374151').text(sections[0].header.subtitle);
+    }
+    doc.moveDown(0.4);
+    doc.moveTo(48, doc.y).lineTo(552, doc.y).strokeColor('#e5e7eb').stroke();
+    doc.moveDown(0.6);
+
+    const body = sections.filter((section) => section.title);
+    body.forEach((section) => {
+      doc.fontSize(13).fillColor('#111827').text(section.title);
+      doc.moveDown(0.3);
+      doc.fontSize(10).fillColor('#6b7280').text('Students: ', { continued: true }).fillColor('#111827').text(`${section.metrics.studentCount}`);
+      doc.fontSize(10).fillColor('#6b7280').text('Approved submissions: ', { continued: true }).fillColor('#111827').text(`${section.metrics.submissionCount}`);
+      doc.fontSize(10).fillColor('#6b7280').text('Total points: ', { continued: true }).fillColor('#111827').text(`${section.metrics.totalPoints}`);
+      doc.fontSize(10).fillColor('#6b7280').text('Average score per student: ', { continued: true }).fillColor('#111827').text(`${section.metrics.averageScore}`);
+
+      if (section.metrics.topStudents.length) {
+        doc.moveDown(0.3);
+        doc.fontSize(10).fillColor('#6b7280').text('Top students');
+        section.metrics.topStudents.forEach((student, index) => {
+          doc.fontSize(9).fillColor('#6b7280').text(`  ${index + 1}. `, { continued: true }).fillColor('#111827').text(`${student.name} (${student.registerNumber || '—'}) — ${student.totalPoints} pts`);
+        });
+      }
+      doc.moveDown(0.7);
+    });
+
+    doc.end();
+  } catch (error) {
+    next(error);
+  }
+};
+
 const getLookups = async (req, res, next) => {
   try {
     const schools = await School.find({ status: 'Active' }).select('_id name code').sort({ name: 1 }).lean();
@@ -571,9 +666,121 @@ const createBulkUsers = async (req, res, next) => {
   }
 };
 
+const bulkAssignFaculty = async (req, res, next) => {
+  try {
+    if (!req.file) return sendError(res, 400, 'Please upload an Excel file');
+
+    const fileName = (req.file.originalname || '').toLowerCase();
+    const contentType = (req.file.mimetype || '').toLowerCase();
+    const buffer = req.file.buffer;
+
+    let rows = [];
+    if (fileName.endsWith('.xlsx') || fileName.endsWith('.xls') || contentType.includes('spreadsheetml') || contentType.includes('excel')) {
+      const workbook = XLSX.read(buffer, { type: 'buffer' });
+      const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+      rows = XLSX.utils.sheet_to_json(firstSheet, { defval: '' }) || [];
+    } else {
+      return sendError(res, 400, 'Please upload a valid Excel file (.xlsx/.xls)');
+    }
+
+    const normalizedRows = rows.map((row) => normalizeBulkRow(row)).filter((row) => !isEmptyRow(row));
+    if (!normalizedRows.length) return sendError(res, 400, 'No rows were found in the uploaded file');
+
+    const summary = { totalRows: normalizedRows.length, successCount: 0, failureCount: 0, notFoundCount: 0, validationErrors: [] };
+
+    for (const [index, row] of normalizedRows.entries()) {
+      const rowNumber = index + 2;
+      const emailValue = String(getValue(row, ['email', 'faculty email', 'email id', 'emailaddress']) || '').trim().toLowerCase();
+      const nameValue = String(getValue(row, ['name', 'faculty name', 'full name', 'fullname']) || '').trim();
+      const departmentValue = String(getValue(row, ['department', 'department code', 'dept', 'department name', 'departmentcode', 'dept code', 'deptcode']) || '').trim();
+
+      if (!emailValue && !nameValue) {
+        summary.failureCount += 1;
+        summary.validationErrors.push({ rowNumber, errors: ['Faculty email or name is required'] });
+        continue;
+      }
+      if (!departmentValue) {
+        summary.failureCount += 1;
+        summary.validationErrors.push({ rowNumber, errors: ['Department code or name is required'] });
+        continue;
+      }
+
+      const faculty = await User.findOne({
+        role: { $in: ['faculty', 'teacher'] },
+        ...(emailValue ? { email: emailValue } : { name: nameValue }),
+      }).lean();
+      if (!faculty) {
+        summary.failureCount += 1;
+        summary.notFoundCount += 1;
+        summary.validationErrors.push({ rowNumber, errors: [`No faculty found for ${emailValue || nameValue}`] });
+        continue;
+      }
+
+      const department = await Department.findOne({
+        $or: [{ code: departmentValue }, { name: new RegExp(`^${departmentValue.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }],
+      }).lean();
+      if (!department) {
+        summary.failureCount += 1;
+        summary.validationErrors.push({ rowNumber, errors: [`Department "${departmentValue}" not found`] });
+        continue;
+      }
+
+      if (req.user?.accountType === 'hod' && req.user.departmentId && department._id.toString() !== req.user.departmentId.toString()) {
+        summary.failureCount += 1;
+        summary.validationErrors.push({ rowNumber, errors: [`HOD accounts can only assign faculty to their own department`] });
+        continue;
+      }
+      if (req.user?.accountType === 'dean' && req.user.schoolId && department.schoolId && department.schoolId.toString() !== req.user.schoolId.toString()) {
+        summary.failureCount += 1;
+        summary.validationErrors.push({ rowNumber, errors: [`Department "${departmentValue}" is outside your school`] });
+        continue;
+      }
+
+      const school = department.schoolId ? await School.findById(department.schoolId).select('name').lean().catch(() => null) : null;
+
+      await User.updateOne(
+        { _id: faculty._id },
+        {
+          $set: {
+            departmentId: department._id,
+            department: department.name || departmentValue,
+            ...(department.code ? { departmentCode: department.code } : {}),
+            schoolId: department.schoolId || null,
+            school: school?.name || '',
+          },
+        }
+      );
+      summary.successCount += 1;
+    }
+
+    await logAudit(req, {
+      action: 'Bulk faculty assignment',
+      entityType: 'User',
+      details: {
+        fileName: fileName || '',
+        totalRows: summary.totalRows,
+        successCount: summary.successCount,
+        failureCount: summary.failureCount,
+      },
+    });
+
+    return sendSuccess(res, 200, 'Bulk faculty assignment completed', summary);
+  } catch (error) {
+    next(error);
+  }
+};
+
 const listActivities = async (req, res, next) => {
   try {
-    const activities = await Activity.find({}).sort({ vertical: 1, activityName: 1 });
+    const verticalNumber = (value = '') => {
+      const match = String(value).match(/Vertical\s*(\d+)/i);
+      return match ? parseInt(match[1], 10) : 99;
+    };
+    const activities = await Activity.find({});
+    activities.sort((a, b) => (
+      verticalNumber(a.vertical) - verticalNumber(b.vertical) ||
+      String(a.activityName).localeCompare(String(b.activityName))
+    ));
     return sendSuccess(res, 200, 'Activities fetched successfully', activities);
   } catch (error) {
     next(error);
@@ -840,6 +1047,102 @@ const rolloverAcademicYear = async (req, res, next) => {
   }
 };
 
+const getDepartmentStats = async (req, res, next) => {
+  try {
+    const scopeQuery = buildScopeQuery(req);
+
+    const departments = await Department.find(scopeQuery.departmentId ? { _id: scopeQuery.departmentId } : {}).select('name schoolId').lean();
+    const deptNames = departments.map((d) => d.name).filter(Boolean);
+
+    const studentQuery = { role: 'student', status: 'Active' };
+    if (scopeQuery.departmentId) studentQuery.departmentId = scopeQuery.departmentId;
+
+    const students = await User.find(studentQuery).select('departmentId department').lean();
+    const deptStudentMap = {};
+    students.forEach((s) => {
+      const dept = s.department || 'Unknown';
+      deptStudentMap[dept] = (deptStudentMap[dept] || 0) + 1;
+    });
+
+    const studentIds = students.map((s) => s._id);
+    const pointRows = await Submission.aggregate([
+      { $match: { status: 'Approved', studentId: { $in: studentIds } } },
+      {
+        $lookup: { from: 'users', localField: 'studentId', foreignField: '_id', as: 'student' },
+      },
+      { $unwind: { path: '$student', preserveNullAndEmptyArrays: true } },
+      {
+        $group: {
+          _id: '$student.department',
+          totalPoints: { $sum: '$pointsAwarded' },
+          submissions: { $sum: 1 },
+          avgPoints: { $avg: '$pointsAwarded' },
+        },
+      },
+    ]);
+
+    const verticalRows = await Submission.aggregate([
+      { $match: { status: 'Approved', studentId: { $in: studentIds } } },
+      {
+        $lookup: { from: 'activities', localField: 'activityId', foreignField: '_id', as: 'activity' },
+      },
+      { $unwind: { path: '$activity', preserveNullAndEmptyArrays: true } },
+      {
+        $group: {
+          _id: { department: '$student.department', vertical: '$activity.vertical' },
+          points: { $sum: '$pointsAwarded' },
+        },
+      },
+    ]);
+
+    const deptMap = {};
+    pointRows.forEach((row) => {
+      const dept = row._id || 'Unknown';
+      deptMap[dept] = {
+        department: dept,
+        students: deptStudentMap[dept] || 0,
+        totalPoints: row.totalPoints || 0,
+        submissions: row.submissions || 0,
+        avgPoints: Math.round((row.avgPoints || 0) * 10) / 10,
+      };
+    });
+
+    Object.keys(deptStudentMap).forEach((dept) => {
+      if (!deptMap[dept]) {
+        deptMap[dept] = { department: dept, students: deptStudentMap[dept], totalPoints: 0, submissions: 0, avgPoints: 0 };
+      }
+    });
+
+    const verticalByDept = {};
+    verticalRows.forEach((row) => {
+      const dept = row._id?.department || 'Unknown';
+      const vertical = row._id?.vertical || 'General';
+      if (!verticalByDept[dept]) verticalByDept[dept] = {};
+      verticalByDept[dept][vertical] = row.points || 0;
+    });
+
+    return sendSuccess(res, 200, 'Department stats fetched', {
+      departments: Object.values(deptMap).sort((a, b) => b.totalPoints - a.totalPoints),
+      verticalByDept,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const getDepartmentAiSummary = async (req, res, next) => {
+  try {
+    const result = await generateDepartmentSummary({
+      schoolId: req.user?.accountType === 'dean' ? req.user.schoolId : undefined,
+      departmentId: req.user?.accountType === 'hod' ? req.user.departmentId : undefined,
+    });
+
+    return sendSuccess(res, 200, 'AI department summary generated', result);
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getUsers,
   exportUsers,
@@ -852,6 +1155,7 @@ module.exports = {
   getAnalytics,
   getLookups,
   createBulkUsers,
+  bulkAssignFaculty,
   listActivities,
   createActivity,
   updateActivity,
@@ -862,4 +1166,7 @@ module.exports = {
   getAcademicSettings,
   updateAcademicSettings,
   rolloverAcademicYear,
+  exportAdminReport,
+  getDepartmentStats,
+  getDepartmentAiSummary,
 };

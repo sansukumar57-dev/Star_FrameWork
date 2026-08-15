@@ -2,7 +2,7 @@ const express = require('express');
 const authMiddleware = require('../middleware/authMiddleware');
 const allowRoles = require('../middleware/roleMiddleware');
 const upload = require('../middleware/uploadMiddleware');
-const { getProfile, updateProfile, submitActivity, resubmitActivity, getMySubmissions, getEarnedPoints, getActivities, appealSubmission, getNotifications, markNotificationRead, markAllNotificationsRead, getLeaderboard, getProgressCard, getDeadlineAlerts, studentValidators } = require('../controllers/studentController');
+const { getProfile, updateProfile, submitActivity, resubmitActivity, getMySubmissions, getEarnedPoints, getActivities, appealSubmission, getNotifications, markNotificationRead, markAllNotificationsRead, getLeaderboard, getProgressCard, getDeadlineAlerts, getPointsHistory, getBookmarks, toggleBookmark, addComment, getComments, studentValidators } = require('../controllers/studentController');
 const { getSubmissionFile } = require('../controllers/submissionController');
 
 const router = express.Router();
@@ -24,5 +24,10 @@ router.get('/notifications', getNotifications);
 router.put('/notifications/:id/read', markNotificationRead);
 router.put('/notifications/read-all', markAllNotificationsRead);
 router.get('/deadline-alerts', getDeadlineAlerts);
+router.get('/points-history', getPointsHistory);
+router.get('/bookmarks', getBookmarks);
+router.post('/bookmarks/toggle', toggleBookmark);
+router.get('/submission/:id/comments', getComments);
+router.post('/submission/:id/comments', addComment);
 
 module.exports = router;

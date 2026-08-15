@@ -11,5 +11,5 @@ test('normalizes sheet rows and detects missing required fields', () => {
     email: 'ava@example.com',
   });
   assert.equal(isEmptyRow({ Name: '', Email: '   ' }), true);
-  assert.deepEqual(getRequiredValidationErrors({ name: 'Ava' }), ['Register number is required']);
+  assert.deepEqual(getRequiredValidationErrors({ name: 'Ava' }), ['Register number is required', 'Email is required']);
 });

@@ -45,6 +45,18 @@ const submissionSchema = new mongoose.Schema({
   aiReview: { type: aiReviewSchema, default: null },
   appeal: { type: appealSchema, default: () => ({ status: 'None' }) },
   academicYear: { type: String, trim: true, default: '' },
+  // Duplicate / fraud detection
+  certificateImageHash: { type: String, default: '' },
+  certificateColorHash: { type: String, default: '' },
+  duplicateOf: { type: mongoose.Schema.Types.ObjectId, ref: 'Submission', default: null },
+  // Comment thread for feedback
+  comments: [{
+    authorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    authorName: { type: String, default: '' },
+    authorRole: { type: String, default: '' },
+    text: { type: String, default: '' },
+    createdAt: { type: Date, default: Date.now },
+  }],
 }, { timestamps: true });
 
 submissionSchema.index({ studentId: 1, status: 1 });
