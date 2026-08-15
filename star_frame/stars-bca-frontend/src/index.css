@@ -7,17 +7,28 @@
   --color-paper: #F4F6FB;
   --color-card: #FFFFFF;
   --color-ink: #17263F;
+  --color-ink-2: #46546B;
   --color-rule: #E2E8F2;
+  --color-brand: #2C4D90;
+  --color-brand-100: #DCE4F5;
   --color-brand-300: #92A8DA;
   --color-brand-500: #2C4D90;
   --color-brand-600: #26407A;
+  --color-leaf: #208D49;
   --color-leaf-300: #7BC497;
   --color-leaf-500: #208D49;
+  --color-slate-100: #EEF2F7;
   --color-slate-300: #C6CFDE;
   --color-slate-400: #9AA8BE;
-  --color-slate-100: #EEF2F7;
   --color-amber-500: #F59E0B;
   --color-rose-500: #F43F5E;
+  --color-focus: #2C4D90;
+  --radius-card: 8px;
+  --radius-control: 6px;
+  --radius-pill: 9999px;
+  --font-display: "Fraunces", Georgia, serif;
+  --font-body: "Public Sans", system-ui, sans-serif;
+  --font-outlier: "IBM Plex Mono", ui-monospace, monospace;
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
@@ -65,6 +76,15 @@ body {
   }
 }
 
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s var(--ease-out) both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -74,3 +94,20 @@ body {
     transition-duration: 0.01ms !important;
   }
 }
+
+.dark {
+  --color-paper: #0F1729;
+  --color-card: #172033;
+  --color-ink: #E8ECF2;
+  --color-ink-2: #9AA8BE;
+  --color-rule: #253049;
+  --color-brand-100: #1A2744;
+  --color-brand-500: #5E7FBF;
+  --color-brand-600: #7B9AD4;
+  --color-slate-100: #1A2744;
+  --color-slate-300: #3A4B6B;
+  --color-slate-400: #6B7A94;
+}
+.dark body { background: var(--color-paper); color: var(--color-ink); }
+.dark ::-webkit-scrollbar-thumb { background: #3A4B6B; }
+.dark ::selection { background: var(--color-brand-500); }

@@ -115,8 +115,8 @@ export async function markAllNotificationsRead() {
   return request('/api/student/notifications/read-all', { method: 'PUT' })
 }
 
-export async function getStudentLeaderboard() {
-  return request('/api/student/leaderboard')
+export async function getStudentLeaderboard(scope = 'batch') {
+  return request(`/api/student/leaderboard?scope=${encodeURIComponent(scope)}`)
 }
 
 export async function getStudentDeadlineAlerts() {
@@ -127,12 +127,66 @@ export function downloadProgressCard() {
   return downloadFile('/api/student/progress-card', 'progress-card.pdf')
 }
 
-export async function submitStudentEvidence(formData) {
+export async function submitStudentEvidence(formData, onProgress) {
+  const token = localStorage.getItem('stars_token')
+
+  if (typeof onProgress === 'function') {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      xhr.open('POST', `${API_BASE_URL}/api/student/submission`)
+      if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          onProgress(Math.round((event.loaded / event.total) * 100))
+        }
+      }
+      xhr.onload = () => {
+        if (xhr.status === 401) {
+          handleUnauthorized()
+          reject(new Error('Session expired'))
+          return
+        }
+        try {
+          const data = JSON.parse(xhr.responseText)
+          if (xhr.status >= 200 && xhr.status < 300 && data?.success !== false) {
+            resolve(data)
+          } else {
+            reject(new Error(data?.message || 'Upload failed'))
+          }
+        } catch {
+          reject(new Error('Upload failed'))
+        }
+      }
+      xhr.onerror = () => reject(new Error('Network error during upload'))
+      xhr.send(formData)
+    })
+  }
+
   return request('/api/student/submission', { method: 'POST', body: formData, auth: true, isFormData: true })
 }
 
-export async function getTeacherSubmissions(limit = 20, status = 'Pending') {
-  return request(`/api/teacher/submissions/pending?limit=${limit}&status=${status}`)
+export async function getTeacherSubmissions(limit = 20, status = 'Pending', search = '') {
+  const query = new URLSearchParams({ limit: String(limit), status })
+  if (search) query.set('search', search)
+  return request(`/api/teacher/submissions/pending?${query.toString()}`)
+}
+
+export async function getTeacherStudents(search = '') {
+  const query = new URLSearchParams()
+  if (search) query.set('search', search)
+  return request(`/api/teacher/students?${query.toString()}`)
+}
+
+export async function updateTeacherStudentRecords(id, payload) {
+  return request(`/api/teacher/student/${id}/records`, { method: 'PUT', body: payload })
+}
+
+export async function bulkUpdateTeacherStudentRecords(formData) {
+  return request('/api/teacher/students/records/bulk-upload', {
+    method: 'POST',
+    body: formData,
+    isFormData: true,
+  })
 }
 
 export async function getSubmissionFileBlob(submissionId) {
@@ -184,6 +238,10 @@ export async function bulkRejectSubmissions(ids, payload = {}) {
 
 export function exportTeacherSubmissions(status = 'Pending') {
   return downloadFile(`/api/teacher/submissions/export?status=${status}`, 'submissions.xlsx')
+}
+
+export function downloadTeacherReport() {
+  return downloadFile('/api/teacher/report', 'faculty-report.pdf')
 }
 
 export async function runAiReview(submissionId) {
@@ -247,6 +305,18 @@ export async function bulkUploadUsers(formData) {
     body: formData,
     isFormData: true,
   })
+}
+
+export async function bulkAssignFaculty(formData) {
+  return request('/api/admin/users/bulk-assign-faculty', {
+    method: 'POST',
+    body: formData,
+    isFormData: true,
+  })
+}
+
+export function downloadAdminReport() {
+  return downloadFile('/api/admin/report', 'institution-report.pdf')
 }
 
 export function downloadBulkTemplate() {
@@ -326,4 +396,169 @@ export async function lockSemester(batch) {
 
 export async function unlockSemester(batch) {
   return request('/api/hod/semester/unlock', { method: 'PUT', body: { batch: batch || undefined } })
+}
+
+// ---------------------------------------------------------------------------
+// Gamification - Badges, Streaks, Leaderboards
+// ---------------------------------------------------------------------------
+
+export async function getStudentStats(studentId) {
+  return request(`/api/gamification/student/${studentId}/stats`)
+}
+
+export async function getStudentBadges(studentId, academicYear = '') {
+  const query = new URLSearchParams()
+  if (academicYear) query.set('academicYear', academicYear)
+  return request(`/api/gamification/student/${studentId}/badges?${query.toString()}`)
+}
+
+export async function getDepartmentLeaderboard(departmentId, academicYear = '', limit = 10) {
+  const query = new URLSearchParams({ limit: String(limit) })
+  if (academicYear) query.set('academicYear', academicYear)
+  return request(`/api/gamification/leaderboard/department/${departmentId}?${query.toString()}`)
+}
+
+export async function getStudentCoachInsights(studentId) {
+  return request(`/api/gamification/student/${studentId}/coach`)
+}
+
+// ---------------------------------------------------------------------------
+// Student — Points Ledger, Bookmarks, Comments
+// ---------------------------------------------------------------------------
+
+export async function getStudentPointsHistory() {
+  return request('/api/student/points-history')
+}
+
+export async function getStudentBookmarks() {
+  return request('/api/student/bookmarks')
+}
+
+export async function toggleStudentBookmark(activityId) {
+  return request('/api/student/bookmarks/toggle', { method: 'POST', body: { activityId } })
+}
+
+export async function getSubmissionComments(submissionId) {
+  return request(`/api/student/submission/${submissionId}/comments`)
+}
+
+export async function addSubmissionComment(submissionId, text) {
+  return request(`/api/student/submission/${submissionId}/comments`, { method: 'POST', body: { text } })
+}
+
+// ---------------------------------------------------------------------------
+// Admin — Department Stats
+// ---------------------------------------------------------------------------
+
+export async function getDepartmentStats() {
+  return request('/api/admin/department-stats')
+}
+
+export async function getDepartmentAiSummary() {
+  return request('/api/admin/ai/department-summary')
+}
+
+// ---------------------------------------------------------------------------
+// Admin — AI Tools (activity suggestions, at-risk, trends, duplicates, digest)
+// ---------------------------------------------------------------------------
+
+export async function getActivitySuggestions({ activityName, vertical = '', maximumPoints = 100 }) {
+  return request('/api/admin/ai/activity-suggestions', { method: 'POST', body: { activityName, vertical, maximumPoints } })
+}
+
+export async function getAtRiskStudents() {
+  return request('/api/admin/ai/at-risk')
+}
+
+export async function notifyAtRiskStudents() {
+  return request('/api/admin/ai/at-risk/notify', { method: 'POST' })
+}
+
+export async function getTrendAnalytics(months = 6) {
+  return request(`/api/admin/ai/trends?months=${months}`)
+}
+
+export async function getFlaggedDuplicates() {
+  return request('/api/admin/ai/duplicates')
+}
+
+export async function previewWeeklyDigest() {
+  return request('/api/admin/ai/digest/preview', { method: 'POST', body: {} })
+}
+
+export async function sendWeeklyDigest() {
+  return request('/api/admin/ai/digest/send', { method: 'POST' })
+}
+
+export async function semanticSearch(query) {
+  return request('/api/search/semantic', { method: 'POST', body: { query } })
+}
+
+export async function getAiClearedCount() {
+  return request('/api/teacher/submissions/ai-cleared-count')
+}
+
+export async function autoApproveAiCleared() {
+  return request('/api/teacher/submissions/auto-approve-ai', { method: 'POST' })
+}
+
+// ---------------------------------------------------------------------------
+// Bulk Operations & Exports
+// ---------------------------------------------------------------------------
+
+export function exportStudentsCSV(departmentId = '', academicYear = '') {
+  const query = new URLSearchParams()
+  if (departmentId) query.set('departmentId', departmentId)
+  if (academicYear) query.set('academicYear', academicYear)
+  return downloadFile(`/api/bulk/export/students/csv?${query.toString()}`, 'students.csv')
+}
+
+export function exportSubmissionsExcel(status = '', departmentId = '', academicYear = '') {
+  const query = new URLSearchParams()
+  if (status) query.set('status', status)
+  if (departmentId) query.set('departmentId', departmentId)
+  if (academicYear) query.set('academicYear', academicYear)
+  return downloadFile(`/api/bulk/export/submissions/excel?${query.toString()}`, 'submissions.xlsx')
+}
+
+export function generateDepartmentReport(departmentId, academicYear = '') {
+  const query = new URLSearchParams({ departmentId })
+  if (academicYear) query.set('academicYear', academicYear)
+  return downloadFile(`/api/bulk/export/department/report?${query.toString()}`, 'department-report.pdf')
+}
+
+export async function bulkImportStudents(csvData, departmentId, academicYear = '') {
+  return request('/api/bulk/import/students', {
+    method: 'POST',
+    body: { csvData, departmentId, academicYear }
+  })
+}
+
+export async function bulkUpdateSubmissions(submissionIds, status, remarks = '') {
+  return request('/api/bulk/update/submissions', {
+    method: 'POST',
+    body: { submissionIds, status, remarks }
+  })
+}
+
+export async function bulkAssignTeachers(assignments) {
+  return request('/api/bulk/assign/teachers', {
+    method: 'POST',
+    body: { assignments }
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Notification broadcast (principal/admin)
+// ---------------------------------------------------------------------------
+
+export async function broadcastDeadlineNotifications(windowDays = 7) {
+  return request('/api/notifications/broadcast/deadlines', {
+    method: 'POST',
+    body: { windowDays }
+  })
+}
+
+export async function previewDeadlineNotifications(windowDays = 7) {
+  return request(`/api/notifications/broadcast/deadlines/preview?windowDays=${windowDays}`)
 }

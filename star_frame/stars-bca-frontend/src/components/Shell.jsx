@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { NavLink, useNavigate, useLocation } from 'react-router-dom'
+import { useTheme } from '../utils/theme.jsx'
 import kprcasLogo from '../assets/kprcas.jpg'
 
 /* Hallmark · genre: editorial · macrostructure: Workbench · design-system: design.md · designed-as-app */
@@ -16,11 +17,13 @@ export function Logo({ size = 40, className = '' }) {
   )
 }
 
-const NAV = {
+export const NAV = {
   student: [
     { to: '/student', label: 'Dashboard', icon: '\u2302' },
     { to: '/student/tasks', label: 'STAR Tasks', icon: '\u2605' },
     { to: '/student/submissions', label: 'My Submissions', icon: '\u2713' },
+    { to: '/student/points-ledger', label: 'Points Ledger', icon: '\u25C8' },
+    { to: '/student/bookmarks', label: 'Bookmarks', icon: '\u2606' },
     { to: '/student/leaderboard', label: 'Leaderboard', icon: '\u25C8' },
     { to: '/student/notifications', label: 'Notifications', icon: '\u26A0' },
   ],
@@ -39,20 +42,31 @@ const NAV = {
     { to: '/hod', label: 'Dashboard', icon: '\u2302' },
     { to: '/hod/verify', label: 'Verify Submissions', icon: '\u2713' },
     { to: '/hod/semester', label: 'Semester Lock', icon: '\u26BF' },
+    { to: '/principal', label: 'User Management', icon: '\u2699' },
   ],
 }
 
 const ROLE_LABEL = { student: 'Student', faculty: 'Faculty', principal: 'Principal', hod: 'HOD' }
 
-export default function Shell({ role, userName, department, children, profileTrigger = null, badges = {} }) {
+export default function Shell({ role, userName, department, children, profileTrigger = null, badges = {}, navLinks = null }) {
   const navigate = useNavigate()
   const location = useLocation()
-  const links = NAV[role] || []
+  const links = navLinks || NAV[role] || []
   const [menuOpen, setMenuOpen] = useState(false)
+  const { theme, toggleTheme } = useTheme()
 
   useEffect(() => {
     setMenuOpen(false)
   }, [location.pathname])
+
+  useEffect(() => {
+    if (!menuOpen) return
+    function handleKey(e) {
+      if (e.key === 'Escape') setMenuOpen(false)
+    }
+    document.addEventListener('keydown', handleKey)
+    return () => document.removeEventListener('keydown', handleKey)
+  }, [menuOpen])
 
   function signOut() {
     localStorage.removeItem('stars_token')
@@ -150,6 +164,14 @@ export default function Shell({ role, userName, department, children, profileTri
             )}
             <button
               type="button"
+              onClick={toggleTheme}
+              className="flex h-8 w-8 items-center justify-center rounded-full border border-rule text-slate-500 transition-colors hover:border-slate-300 hover:text-ink focus-ring"
+              aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            >
+              {theme === 'dark' ? '\u2600' : '\u263E'}
+            </button>
+            <button
+              type="button"
               onClick={signOut}
               className="rounded-full border border-rule px-3.5 py-1.5 text-xs font-medium text-slate-500 transition-colors hover:border-slate-300 hover:text-ink focus-ring"
             >
@@ -175,7 +197,7 @@ export default function Shell({ role, userName, department, children, profileTri
         </nav>
       </header>
 
-      <main className="flex-1 px-4 py-6 sm:px-6 lg:px-10 lg:py-8">{children}</main>
+      <main className="flex-1 animate-fade-in px-4 py-6 sm:px-6 lg:px-10 lg:py-8">{children}</main>
 
       {/* Colophon */}
       <footer className="border-t border-rule px-4 py-5 sm:px-6 lg:px-10">

@@ -3,7 +3,7 @@ const authMiddleware = require('../middleware/authMiddleware');
 const allowRoles = require('../middleware/roleMiddleware');
 const deanScopedMiddleware = require('../middleware/deanScopedMiddleware');
 const upload = require('../middleware/uploadMiddleware');
-const { getUsers, exportUsers, getUserById, createDepartment, createUser, updateUser, deleteUser, resetPassword, getAnalytics, getLookups, createBulkUsers, listActivities, createActivity, updateActivity, deleteActivity, exportAnalytics, downloadBulkTemplate, getAuditLogs, getAcademicSettings, updateAcademicSettings, rolloverAcademicYear } = require('../controllers/adminController');
+const { getUsers, exportUsers, getUserById, createDepartment, createUser, updateUser, deleteUser, resetPassword, getAnalytics, getLookups, createBulkUsers, bulkAssignFaculty, listActivities, createActivity, updateActivity, deleteActivity, exportAnalytics, downloadBulkTemplate, getAuditLogs, getAcademicSettings, updateAcademicSettings, rolloverAcademicYear, exportAdminReport, getDepartmentStats, getDepartmentAiSummary } = require('../controllers/adminController');
 
 const router = express.Router();
 
@@ -28,6 +28,10 @@ router.get('/users/:id', getUserById);
 router.post('/departments', createDepartment);
 router.post('/users', createUser);
 router.post('/users/bulk-upload', upload.single('file'), createBulkUsers);
+router.post('/users/bulk-assign-faculty', upload.single('file'), bulkAssignFaculty);
+router.get('/department-stats', getDepartmentStats);
+router.get('/ai/department-summary', getDepartmentAiSummary);
+router.get('/report', exportAdminReport);
 router.put('/users/:id', updateUser);
 router.delete('/users/:id', deleteUser);
 router.put('/users/:id/reset-password', resetPassword);

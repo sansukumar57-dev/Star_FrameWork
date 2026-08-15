@@ -4,12 +4,16 @@ import Shell from '../components/Shell.jsx'
 import { Modal, Button, Toast, LoadingState, EmptyState, Field, Input, Select } from '../components/UI.jsx'
 import { TASKS, categoryById } from '../data/mockData.js'
 import { getStudentActivities, getStudentProfile, getStudentPoints, getStudentSubmissions, submitStudentEvidence, getSubmissionFileBlob, getStudentNotifications, getStudentDeadlineAlerts } from '../utils/api.js'
+import { getTaskProfile, getSubmissionRules, normalizeTaskName } from '../utils/taskProfiles.js'
+import useSubmissionStatusToasts from '../hooks/useSubmissionStatusToasts.js'
 import StudentDashboardHome from './StudentDashboardHome.jsx'
 import StudentTasksPage from './StudentTasksPage.jsx'
 import StudentSubmissionsPage from './StudentSubmissionsPage.jsx'
 import StudentProfileModal from './StudentProfileModal.jsx'
 import StudentLeaderboardPage from './StudentLeaderboardPage.jsx'
 import StudentNotificationsPage from './StudentNotificationsPage.jsx'
+import StudentPointsLedgerPage from './StudentPointsLedgerPage.jsx'
+import StudentBookmarksPage from './StudentBookmarksPage.jsx'
 
 /* Hallmark · genre: editorial · macrostructure: Workbench · design-system: design.md · designed-as-app */
 
@@ -32,6 +36,7 @@ export default function StudentDashboard() {
   const [profileOpen, setProfileOpen] = useState(false)
   const [selectedLevel, setSelectedLevel] = useState('')
   const [urlInput, setUrlInput] = useState('')
+  const [uploadProgress, setUploadProgress] = useState(0)
   const [unreadCount, setUnreadCount] = useState(0)
   const [alerts, setAlerts] = useState([])
   const [dismissedAlerts, setDismissedAlerts] = useState(() => {
@@ -47,6 +52,8 @@ export default function StudentDashboard() {
       .then((res) => setAlerts(res.data?.alerts || []))
       .catch(() => {})
   }, [])
+
+  useSubmissionStatusToasts({ enabled: !loading, onUnreadChange: setUnreadCount })
 
   useEffect(() => {
     try {
@@ -186,113 +193,6 @@ export default function StudentDashboard() {
     [submissions]
   )
 
-  function normalizeTaskName(value = '') {
-    return String(value || '').toLowerCase()
-  }
-
-  function getTaskProfile(task = {}) {
-    const name = normalizeTaskName(task?.name)
-
-    if (name.includes('internship') || name.includes('case study') || name.includes('mini project')) {
-      return {
-        group: 'activity-1',
-        defaultOption: name.includes('internship') ? 'Internship' : name.includes('case study') ? 'Case Study' : 'Mini Project',
-        options: ['Internship', 'Case Study', 'Mini Project'],
-      }
-    }
-
-    if (name.includes('visit')) {
-      return {
-        group: 'activity-2',
-        defaultOption: name.includes('industrial') ? 'Industrial Visit' : name.includes('institutional') ? 'Institutional Visit' : 'International Visit',
-        options: ['Industrial Visit', 'Institutional Visit', 'International Visit'],
-      }
-    }
-
-    // Activities that need a URL proof
-    if (name.includes('live project') || name.includes('github portfolio') || name.includes('portfolio website') ||
-        name.includes('linkedin') || name.includes('kaggle') || name.includes('genai') ||
-        name.includes('ai / ml') || name.includes('open-source')) {
-      return { group: 'url', defaultOption: '', options: [] }
-    }
-
-    // Level-select activities (V2–V10)
-    const levelMap = {
-      'semester exam': ['< 60%', '60–69%', '70–79%', '80% and above'],
-      'attendance': ['75–79%', '80–89%', '90–94%', '95% and above'],
-      'internship': ['Case study/Mini project', 'Industry internship (2 weeks)', 'Industry internship (4 weeks)'],
-      'case study': ['Case study/Mini project', 'Industry internship (2 weeks)', 'Industry internship (4 weeks)'],
-      'mini project': ['Case study/Mini project', 'Industry internship (2 weeks)', 'Industry internship (4 weeks)'],
-      'visit': ['Industrial Visit completed', 'Institutional Visit completed', 'International Visit / Conference'],
-      'library': ['5 Hrs', '10 Hrs', '15 Hrs'],
-      'scholarship': ['Applied for scholarship', 'Scholarship received', 'Merit Scholarship'],
-      'nptel': ['Registered & Completed Assignments', 'Successfully completed', 'Elite', 'Elite with Gold/Silver badge'],
-      'online certification': ['Completed 1 course', 'Specialisation / multi-course', 'Professional certificate', '2 professional certs'],
-      'industry certification': ['Foundation level', 'Associate level', 'Professional level', 'Expert / Speciality level'],
-      'short mooc': ['Enrolled & completed', '2 MOOCs completed', '3+ MOOCs with assessment'],
-      'value added course': ['VAC with assessment / internal certification', 'External agency / industry expert with certification'],
-      'leetcode': ['Profile + 5–20 Easy', '50 Easy / 10 Medium', '50 Medium problems', '100+ Medium / Hard / Top 10%'],
-      'hackerrank': ['Profile + 5–20 Easy', '50 Easy / 10 Medium', '50 Medium problems', '100+ Medium / Hard / Top 10%'],
-      'hackerearth': ['Profile + 5–20 Easy', '50 Easy / 10 Medium', '50 Medium problems', '100+ Medium / Hard / Top 10%'],
-      'programming, data structures': ['Basic assessment cleared', 'Intermediate cleared', 'Advanced cleared', 'Expert / Certification'],
-      'codechef': ['1–2 Star / 25 problems', '3 Star / 50 problems', '4 Star / 100 problems', '5 Star / 200 problems'],
-      'geeksforgeeks': ['1–2 Star / 25 problems', '3 Star / 50 problems', '4 Star / 100 problems', '5 Star / 200 problems'],
-      'coding contest': ['Participated', 'Top 50%', 'Finalist', 'Winner'],
-      'open-source': ['GitHub profile + starred/forked repo + raised an issue', 'Pull Request submitted'],
-      'hackathon': ['Participated', 'Qualified round / finalist', 'Regional/Local winner', 'IIT/NIT /National winner'],
-      'datathon': ['Participated', 'Qualified round / finalist', 'Regional/Local winner', 'IIT/NIT /National winner'],
-      'ideathon': ['Participated', 'Shortlisted / top 50%', 'Finalist', 'Winner'],
-      'business plan': ['Participated', 'Shortlisted / top 50%', 'Finalist', 'Winner'],
-      'startup': ['Participated / idea submitted', 'Prototype / MVP built', 'Incubated', 'Startup registered / funded'],
-      'technical event': ['Intra-college participation', 'Intra-college winner / Inter-college participation', 'Inter-college winner', 'State/national winner'],
-      'paper presentation': ['Internal / Department', 'External/Intercollegiate', 'State / National level', 'International'],
-      'conference / journal': ['Abstract submitted', 'Conference paper published', 'Indexed conference', 'Indexed journal (Scopus)'],
-      'patent': ['Draft filed', 'Published', 'Granted', 'Copyright'],
-      'book chapter': ['Internal project report', 'Book chapter submitted', 'Book chapter published', 'International publisher'],
-      'workshop': ['1 event attended', '2 events attended', '3+ events / paper presented', 'Best paper / award'],
-      'symposium': ['1 event attended', '2 events attended', '3+ events / paper presented', 'Best paper / award'],
-      'kaggle': ['Profile created + participated', 'Top 50%', 'Bronze / top 25%', 'Silver/Gold / top 10%'],
-      'analytics vidhya': ['Profile created + participated', 'Top 50%', 'Bronze / top 25%', 'Silver/Gold / top 10%'],
-      'ai / ml': ['Prototype / idea stage', 'Functional project', 'Deployed (app / dashboard)', 'Real user adoption / published'],
-      'web dev': ['Prototype / idea stage', 'Functional project', 'Deployed (app / dashboard)', 'Real user adoption / published'],
-      'networking project': ['Prototype / idea stage', 'Functional project', 'Deployed (app / dashboard)', 'Real user adoption / published'],
-      'live project': ['Basic deployment', 'Multi-service deployment', 'Production-ready', 'Certified + deployed'],
-      'genai': ['Used AI tools + documented', 'Built GenAI-integrated project', 'Deployed GenAI app', 'Industry / research recognised'],
-      'prompt engineering': ['Used AI tools + documented', 'Built GenAI-integrated project', 'Deployed GenAI app', 'Industry / research recognised'],
-      'linkedin': ['Profile created (Professional)', '50 connections + active posts + tagging college, Principal, Dean & HOD', '100 connections + weekly posts + engagement (likes/comments)', 'Recommendations + thought leader + college/department featured/shared your post'],
-      'github portfolio': ['Account + 2–5 repos', '5–10 repos with README', 'Practical work submission', 'Mini-projects / projects submission'],
-      'portfolio website': ['Basic portfolio page', 'Professional with projects', 'Project showcase + deployed'],
-      'technical blog': ['3 blogs / 3 videos', '5 blogs', '10 blogs / YouTube channel', 'Industry / media recognition'],
-      'podcast': ['3 blogs / 3 videos', '5 blogs', '10 blogs / YouTube channel', 'Industry / media recognition'],
-      'peer mentoring': ['Helped 1–2 students', 'Study group / 5 students', 'Workshop / session conducted (class / juniors)', 'Structured mentoring programme'],
-      'knowledge sharing': ['Helped 1–2 students', 'Study group / 5 students', 'Workshop / session conducted (class / juniors)', 'Structured mentoring programme'],
-      'student council': ['Member', 'Active contributor', 'Coordinator / Jt. Secretary', 'President / Secretary'],
-      'club': ['Member', 'Active contributor', 'Coordinator / Jt. Secretary', 'President / Secretary'],
-      'professional conduct': ['Awarded by Mentor'],
-      'event organising': ['Volunteer in a department-level event', 'Core committee member in college-level event', 'Coordinator / Joint Secretary of major college event', 'Chief Organiser / Convenor of inter-college / national event'],
-      'nss': ['Enrolled', 'Active volunteer', 'Event organiser / camp', 'Camp leader / award'],
-      'ncc': ['Enrolled', 'Certificate A/B', 'Certificate C', 'Leadership / National'],
-      'cultural': ['College-level participation', 'Intercollegiate participation', 'Intercollegiate winner', 'State / national level'],
-      'sports': ['College-level participation', 'Intercollegiate participation', 'Intercollegiate winner', 'State / national level'],
-      'community outreach': ['Participated in 1 activity', 'Active volunteer (3+ events)', 'Coordinator / project lead', 'Measurable social impact'],
-      'social initiative': ['Participated in 1 activity', 'Active volunteer (3+ events)', 'Coordinator / project lead', 'Measurable social impact'],
-      'air-rifle': ['Enrolled', 'District level', 'State level', 'National level'],
-      'resume': ['Basic draft created', 'Senior reviewed', 'ATS-optimised', 'Industry-reviewed / LinkedIn synced'],
-      'mock interview': ['Attended mock / aptitude', 'Cleared aptitude test (>=60%)', 'High rating mock interview', 'Outstanding / top performer'],
-      'aptitude': ['Attended mock / aptitude', 'Cleared aptitude test (>=60%)', 'High rating mock interview', 'Outstanding / top performer'],
-      'placement': ['Internship offer received', 'Placement offer (<5 LPA)', 'Placement offer (5-10 LPA)', 'Dream offer (>10 LPA)'],
-      'internship offer': ['Internship offer received', 'Placement offer (<5 LPA)', 'Placement offer (5-10 LPA)', 'Dream offer (>10 LPA)'],
-      'higher studies': ['Appeared in exam', 'Qualified / cleared', 'Good percentile (>=70%ile)', 'Top rank / scholarship / admission'],
-      'competitive exam': ['Appeared in exam', 'Qualified / cleared', 'Good percentile (>=70%ile)', 'Top rank / scholarship / admission'],
-    }
-
-    for (const [key, options] of Object.entries(levelMap)) {
-      if (name.includes(key)) return { group: 'level-select', defaultOption: '', options }
-    }
-
-    return { group: 'generic', defaultOption: '', options: [] }
-  }
-
   function openUpload(task) {
     const profile = getTaskProfile(task)
     setActiveTask(task)
@@ -304,33 +204,17 @@ export default function StudentDashboard() {
     setUrlInput('')
   }
 
-  function getSubmissionRules() {
-    const profile = getTaskProfile(activeTask)
-    const selectedActivity = profile.group === 'activity-1' ? activityOption : profile.group === 'activity-2' ? visitOption : ''
-    const isInternship = selectedActivity === 'Internship'
-    const isCaseStudy = selectedActivity === 'Case Study'
-    const isMiniProject = selectedActivity === 'Mini Project'
-
-    const requiresFile = profile.group === 'generic' || profile.group === 'activity-2' ||
-      isInternship || isCaseStudy
-    const requiresUrl = isMiniProject || profile.group === 'url'
-    const requiresLevel = profile.group === 'level-select'
-
-    const canSubmit =
-      (requiresFile ? Boolean(fileName) : true) &&
-      (requiresUrl ? Boolean(urlInput.trim()) : true) &&
-      (requiresLevel ? Boolean(selectedLevel) : true)
-
-    return { profile, selectedActivity, isInternship, isCaseStudy, isMiniProject, requiresFile, requiresUrl, requiresLevel, canSubmit }
+  function getSubmissionRulesForTask() {
+    return getSubmissionRules(activeTask, { activityOption, visitOption, selectedLevel, urlInput, fileName })
   }
 
-  const ALLOWED_FILE_TYPES = ['image/', 'application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml']
-  const MAX_FILE_SIZE = 10 * 1024 * 1024
+  const ALLOWED_FILE_TYPES = ['image/', 'application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml', 'video/']
+  const MAX_FILE_SIZE = 100 * 1024 * 1024
 
   async function submitEvidence() {
     if (!activeTask) return
 
-    const rules = getSubmissionRules()
+    const rules = getSubmissionRulesForTask()
     const selectedFile = document.querySelector('input[type="file"]')?.files?.[0]
 
     if (rules.requiresLevel && !selectedLevel) {
@@ -344,11 +228,11 @@ export default function StudentDashboard() {
     if (rules.requiresFile && selectedFile) {
       const typeOk = ALLOWED_FILE_TYPES.some((prefix) => selectedFile.type.startsWith(prefix))
       if (!typeOk) {
-        setToast('Please upload an image, PDF, or Word document.')
+        setToast('Please upload an image, PDF, Word document, or video.')
         return
       }
       if (selectedFile.size > MAX_FILE_SIZE) {
-        setToast('File is too large — the maximum size is 10 MB.')
+        setToast('File is too large — the maximum size is 100 MB.')
         return
       }
     }
@@ -385,14 +269,17 @@ export default function StudentDashboard() {
     if (selectedFile) formData.append('certificateFile', selectedFile)
 
     try {
-      const response = await submitStudentEvidence(formData)
+      setUploadProgress(0)
+      const response = await submitStudentEvidence(formData, (progress) => setUploadProgress(progress))
       setSubmissions((prev) => [response.data, ...prev])
       setActiveTask(null)
       setSelectedLevel('')
       setUrlInput('')
+      setUploadProgress(0)
       setToast('Evidence submitted — your faculty will review it shortly.')
       setTimeout(() => setToast(''), 3500)
     } catch (error) {
+      setUploadProgress(0)
       setToast(error.message || 'Submission failed')
     }
   }
@@ -484,6 +371,8 @@ export default function StudentDashboard() {
         <Route path="submissions" element={<StudentSubmissionsPage submissions={submissions} openUpload={openUpload} openEvidence={openEvidence} />} />
         <Route path="leaderboard" element={<StudentLeaderboardPage />} />
         <Route path="notifications" element={<StudentNotificationsPage onUnreadChange={setUnreadCount} />} />
+        <Route path="points-ledger" element={<StudentPointsLedgerPage />} />
+        <Route path="bookmarks" element={<StudentBookmarksPage />} />
         <Route path="*" element={<Navigate to="/student" replace />} />
       </Routes>
 
@@ -504,8 +393,17 @@ export default function StudentDashboard() {
         title={`Upload evidence — ${activeTask?.name || ''}`}
         footer={
           <>
-            <Button variant="ghost" onClick={() => setActiveTask(null)}>Cancel</Button>
-            <Button onClick={submitEvidence} disabled={!getSubmissionRules().canSubmit}>Submit</Button>
+            <Button variant="ghost" onClick={() => setActiveTask(null)} disabled={uploadProgress > 0 && uploadProgress < 100}>Cancel</Button>
+            {uploadProgress > 0 && uploadProgress < 100 ? (
+              <div className="flex w-40 items-center gap-2">
+                <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-200">
+                  <div className="h-full rounded-full transition-all" style={{ width: `${uploadProgress}%`, backgroundColor: 'var(--color-brand-500)' }} />
+                </div>
+                <span className="font-mono text-xs text-slate-500">{uploadProgress}%</span>
+              </div>
+            ) : (
+              <Button onClick={submitEvidence} disabled={!getSubmissionRulesForTask().canSubmit}>Submit</Button>
+            )}
           </>
         }
       >
@@ -554,9 +452,9 @@ export default function StudentDashboard() {
           getTaskProfile(activeTask).group === 'level-select') && (
           <div className="mb-4">
             <label className="block cursor-pointer rounded-md border border-dashed border-rule bg-paper p-6 text-center transition-colors hover:border-brand-300">
-              <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx" className="hidden" onChange={(e) => setFileName(e.target.files?.[0]?.name || '')} />
+              <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.mp4,.webm,.mov" className="hidden" onChange={(e) => setFileName(e.target.files?.[0]?.name || '')} />
               <span className="mx-auto flex h-8 w-8 items-center justify-center rounded-md border border-rule bg-card font-mono text-sm text-slate-400">&#x2191;</span>
-              <p className="mt-2 text-sm text-slate-500">{fileName ? <span className="font-medium text-ink">{fileName}</span> : 'Click to choose a file (PDF, JPG, PNG, DOC) — max 10 MB'}</p>
+              <p className="mt-2 text-sm text-slate-500">{fileName ? <span className="font-medium text-ink">{fileName}</span> : 'Click to choose a file (PDF, JPG, PNG, DOC, MP4, WEBM, MOV) — max 100 MB'}</p>
             </label>
           </div>
         )}

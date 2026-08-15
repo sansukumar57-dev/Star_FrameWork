@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import Shell from '../components/Shell.jsx'
 import { Button, Card, Field, Input, Modal, Textarea, Toast, EmptyState, LoadingState, ConfirmDialog } from '../components/UI.jsx'
-import { getAdminActivities, createAdminActivity, updateAdminActivity, deleteAdminActivity } from '../utils/api.js'
+import { getAdminActivities, createAdminActivity, updateAdminActivity, deleteAdminActivity, getActivitySuggestions } from '../utils/api.js'
 
 /* Hallmark · genre: editorial · macrostructure: Workbench · design-system: design.md · designed-as-app */
 
@@ -18,6 +18,8 @@ export default function ActivityManagement() {
   const [editing, setEditing] = useState(null)
   const [form, setForm] = useState(emptyForm)
   const [confirmDelete, setConfirmDelete] = useState(null)
+  const [currentStep, setCurrentStep] = useState(0)
+  const [suggesting, setSuggesting] = useState(false)
 
   const notify = useCallback((message, tone = 'success') => {
     setToast({ message, tone })
@@ -43,6 +45,7 @@ export default function ActivityManagement() {
   function openCreate() {
     setEditing(null)
     setForm(emptyForm)
+    setCurrentStep(0)
     setFormOpen(true)
   }
 
@@ -58,12 +61,38 @@ export default function ActivityManagement() {
       important: Boolean(activity.important),
     })
     setFormOpen(true)
+    setCurrentStep(0)
   }
 
   function setLevel(index, key, value) {
     const next = [...form.levels]
     next[index] = { ...next[index], [key]: value }
     setForm({ ...form, levels: next })
+  }
+
+  async function suggestWithAI() {
+    if (!form.activityName.trim()) return
+    setSuggesting(true)
+    try {
+      const res = await getActivitySuggestions({
+        activityName: form.activityName.trim(),
+        vertical: form.vertical.trim(),
+        maximumPoints: form.maximumPoints || 100,
+      })
+      const suggestions = res.data || {}
+      setForm((prev) => ({
+        ...prev,
+        description: suggestions.description || prev.description,
+        levels: Array.isArray(suggestions.levels) && suggestions.levels.length
+          ? suggestions.levels.map((level) => ({ label: level.label || '', points: String(level.points ?? '') }))
+          : prev.levels,
+      }))
+      notify('AI suggestions applied — review and save.')
+    } catch (error) {
+      notify(error.message || 'Unable to generate AI suggestions', 'error')
+    } finally {
+      setSuggesting(false)
+    }
   }
 
   async function submit(e) {
@@ -112,7 +141,13 @@ export default function ActivityManagement() {
       if (!map[key]) map[key] = []
       map[key].push(activity)
     })
-    return map
+    return Object.keys(map)
+      .sort((a, b) => {
+        const numA = parseInt(String(a).match(/Vertical\s*(\d+)/i)?.[1], 10) || 99
+        const numB = parseInt(String(b).match(/Vertical\s*(\d+)/i)?.[1], 10) || 99
+        return numA - numB || a.localeCompare(b)
+      })
+      .map((key) => [key, map[key]])
   }, [activities])
 
   if (loading) {
@@ -136,8 +171,8 @@ export default function ActivityManagement() {
       {toast && <Toast message={toast.message} tone={toast.tone} onDismiss={() => setToast(null)} />}
 
       <div className="mt-6 space-y-8">
-        {Object.keys(grouped).length > 0 ? (
-          Object.entries(grouped).map(([vertical, items]) => (
+        {grouped.length > 0 ? (
+          grouped.map(([vertical, items]) => (
             <div key={vertical}>
               <h2 className="font-display text-[11px] uppercase tracking-[0.18em] text-slate-400 mb-3">{vertical}</h2>
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -189,47 +224,99 @@ export default function ActivityManagement() {
         footer={
           <>
             <Button variant="ghost" onClick={() => setFormOpen(false)}>Cancel</Button>
-            <Button onClick={submit} disabled={!form.activityName.trim() || !form.vertical.trim() || form.maximumPoints === ''}>{editing ? 'Save changes' : 'Create activity'}</Button>
+            {currentStep > 0 && (
+              <Button variant="outline" onClick={() => setCurrentStep((s) => s - 1)}>Back</Button>
+            )}
+            {currentStep < 2 ? (
+              <Button
+                onClick={() => setCurrentStep((s) => s + 1)}
+                disabled={currentStep === 0 && (!form.activityName.trim() || !form.vertical.trim() || form.maximumPoints === '')}
+              >
+                Next
+              </Button>
+            ) : (
+              <Button onClick={submit}>Save</Button>
+            )}
           </>
         }
       >
-        <div className="space-y-4">
-          <Field label="Activity name">
-            <Input value={form.activityName} onChange={(e) => setForm({ ...form, activityName: e.target.value })} placeholder="e.g. Internship" />
-          </Field>
-          <Field label="Vertical">
-            <Input value={form.vertical} onChange={(e) => setForm({ ...form, vertical: e.target.value })} placeholder="e.g. Vertical 1 - Academic Performance" />
-          </Field>
-          <Field label="Maximum points">
-            <Input type="number" value={form.maximumPoints} onChange={(e) => setForm({ ...form, maximumPoints: e.target.value })} placeholder="e.g. 10" />
-          </Field>
-          <Field label="Description">
-            <Textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={3} placeholder="What evidence does this activity require?" />
-          </Field>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Field label="Deadline" hint="Students get alerts as this date approaches.">
-              <Input type="date" value={form.deadline} onChange={(e) => setForm({ ...form, deadline: e.target.value })} />
-            </Field>
-            <Field label="Mark as important">
-              <label className="flex cursor-pointer items-center gap-2 rounded-md border border-rule bg-paper px-3 py-2.5">
-                <input type="checkbox" checked={form.important} onChange={(e) => setForm({ ...form, important: e.target.checked })} className="h-4 w-4 accent-amber-500" />
-                <span className="text-sm text-slate-600">Trigger urgent alerts when the deadline is near</span>
-              </label>
-            </Field>
-          </div>
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <label className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">Levels (optional)</label>
-              <Button size="sm" variant="ghost" onClick={() => setForm({ ...form, levels: [...form.levels, { label: '', points: '' }] })}>+ Add level</Button>
-            </div>
-            {form.levels.map((level, index) => (
-              <div key={index} className="flex gap-2 mb-2">
-                <Input value={level.label} onChange={(e) => setLevel(index, 'label', e.target.value)} placeholder="Level label" className="!flex-1" />
-                <Input type="number" value={level.points} onChange={(e) => setLevel(index, 'points', e.target.value)} placeholder="pts" className="!w-24" />
-                <Button size="sm" variant="ghost" onClick={() => setForm({ ...form, levels: form.levels.filter((_, i) => i !== index) })}>✕</Button>
+        <div className="mb-6 flex items-center justify-center">
+          {['Basic Info', 'Levels', 'Settings'].map((label, i) => (
+            <React.Fragment key={label}>
+              {i > 0 && <div className={`mx-1 h-px flex-1 max-w-8 ${currentStep >= i ? 'bg-brand' : 'bg-rule'}`} />}
+              <div className="flex flex-col items-center gap-1">
+                <div className={`flex h-8 w-8 items-center justify-center rounded-full border-2 text-xs font-semibold transition-colors ${currentStep > i ? 'border-brand bg-brand text-white' : currentStep === i ? 'border-brand bg-brand/10 text-brand' : 'border-rule bg-paper text-slate-400'}`}>
+                  {currentStep > i ? '✓' : i + 1}
+                </div>
+                <span className={`text-[10px] font-medium tracking-wide ${currentStep === i ? 'text-ink' : 'text-slate-400'}`}>{label}</span>
               </div>
-            ))}
-          </div>
+            </React.Fragment>
+          ))}
+        </div>
+
+        <div className="space-y-4">
+          {currentStep === 0 && (
+            <>
+              <Field label="Activity name">
+                <Input value={form.activityName} onChange={(e) => setForm({ ...form, activityName: e.target.value })} placeholder="e.g. Internship" />
+              </Field>
+              <Field label="Vertical">
+                <Input value={form.vertical} onChange={(e) => setForm({ ...form, vertical: e.target.value })} placeholder="e.g. Vertical 1 - Academic Performance" />
+              </Field>
+              <Field label="Maximum points">
+                <Input type="number" value={form.maximumPoints} onChange={(e) => setForm({ ...form, maximumPoints: e.target.value })} placeholder="e.g. 10" />
+              </Field>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                loading={suggesting}
+                disabled={!form.activityName.trim()}
+                onClick={suggestWithAI}
+                className="w-full"
+              >
+                ✨ AI suggest description &amp; levels
+              </Button>
+            </>
+          )}
+
+          {currentStep === 1 && (
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">Levels (optional)</label>
+                <Button size="sm" variant="ghost" onClick={() => setForm({ ...form, levels: [...form.levels, { label: '', points: '' }] })}>+ Add level</Button>
+              </div>
+              {form.levels.length === 0 && (
+                <p className="text-sm text-slate-400 py-4 text-center">No levels added yet. Click &quot;+ Add level&quot; to get started.</p>
+              )}
+              {form.levels.map((level, index) => (
+                <div key={index} className="flex gap-2 mb-2">
+                  <Input value={level.label} onChange={(e) => setLevel(index, 'label', e.target.value)} placeholder="Level label" className="!flex-1" />
+                  <Input type="number" value={level.points} onChange={(e) => setLevel(index, 'points', e.target.value)} placeholder="pts" className="!w-24" />
+                  <Button size="sm" variant="ghost" onClick={() => setForm({ ...form, levels: form.levels.filter((_, i) => i !== index) })}>✕</Button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {currentStep === 2 && (
+            <>
+              <Field label="Description">
+                <Textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={3} placeholder="What evidence does this activity require?" />
+              </Field>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <Field label="Deadline" hint="Students get alerts as this date approaches.">
+                  <Input type="date" value={form.deadline} onChange={(e) => setForm({ ...form, deadline: e.target.value })} />
+                </Field>
+                <Field label="Mark as important">
+                  <label className="flex cursor-pointer items-center gap-2 rounded-md border border-rule bg-paper px-3 py-2.5">
+                    <input type="checkbox" checked={form.important} onChange={(e) => setForm({ ...form, important: e.target.checked })} className="h-4 w-4 accent-amber-500" />
+                    <span className="text-sm text-slate-600">Trigger urgent alerts when the deadline is near</span>
+                  </label>
+                </Field>
+              </div>
+            </>
+          )}
         </div>
       </Modal>
 

@@ -19,7 +19,7 @@ const deanScopedMiddleware = (req, res, next) => {
       pathname === '/users' ||
       pathname.startsWith('/users/')
     )) ||
-    (method === 'POST' && (pathname === '/departments' || pathname === '/users' || pathname === '/users/bulk-upload'));
+    (method === 'POST' && (pathname === '/departments' || pathname === '/users'));
 
   if (!allowed) {
     return sendError(res, 403, 'Dean accounts can only manage departments and HODs');

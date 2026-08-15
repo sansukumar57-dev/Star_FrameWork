@@ -55,8 +55,14 @@ export default function Login() {
       }
       localStorage.setItem('stars_token', authData.token)
       localStorage.setItem('stars_user', JSON.stringify(authData.user || {}))
-      const redirectRole = authData.user?.role === 'student' ? 'student' : authData.user?.role === 'admin' ? 'principal' : 'faculty'
-      navigate(redirectRole === 'student' ? '/student' : redirectRole === 'principal' ? '/principal' : '/faculty')
+      const userRole = authData.user?.role
+      const accountType = authData.user?.accountType
+      const destination =
+        userRole === 'student' ? '/student'
+        : userRole === 'faculty' ? '/faculty'
+        : userRole === 'admin' && accountType === 'hod' ? '/hod'
+        : '/principal'
+      navigate(destination)
     } catch (err) {
       const message = err?.message || 'Login failed'
       setError(message.includes('Invalid') || message.includes('credentials') ? 'Invalid credentials. Please check your username and password.' : message)
@@ -77,19 +83,19 @@ export default function Login() {
           <div className="flex h-11 w-11 items-center justify-center rounded-md border border-rule bg-card shadow-soft">
             <Logo size={28} />
           </div>
-          <p className="font-display text-[11px] uppercase tracking-[0.18em] text-slate-400">KPR College of Arts and Science</p>
+          <p className="font-mono text-xs font-medium uppercase tracking-[0.2em] text-slate-500">KPR College of Arts Science and Research</p>
         </div>
 
-        <div className="max-w-md">
-          <h1 className="font-display text-5xl font-semibold leading-none tracking-tight text-ink lg:text-6xl">STARS-BCA</h1>
+        <div className="max-w-lg">
+          <h1 className="font-display text-5xl font-semibold leading-[1.04] tracking-[-0.02em] text-ink lg:text-6xl">STARS-BCA</h1>
           <div className="mt-4 w-20 border-t-2 border-ink" aria-hidden="true" />
-          <p className="mt-7 text-[15px] leading-relaxed text-slate-500">
+          <p className="mt-7 text-base leading-[1.7] text-slate-600">
             The Student STAR Framework keeps a running record of achievement across ten verticals — academic, innovation,
             leadership, and community — in one maintained ledger.
           </p>
         </div>
 
-        <p className="font-display text-[11px] uppercase tracking-[0.18em] text-slate-400">STAR Framework · Management System</p>
+        <p className="font-mono text-xs font-medium uppercase tracking-[0.2em] text-slate-500">STAR Framework · Management System</p>
       </div>
 
       {/* Hairline divider */}
@@ -104,12 +110,12 @@ export default function Login() {
             </div>
             <div>
               <p className="font-display text-lg font-semibold leading-none tracking-tight">STARS-BCA</p>
-              <p className="mt-1 font-display text-[10px] uppercase tracking-[0.22em] text-slate-400">Student Portal</p>
+              <p className="font-mono text-[11px] font-medium uppercase tracking-[0.2em] text-slate-500">Student Portal</p>
             </div>
           </div>
 
-          <h2 className="font-display text-2xl font-semibold tracking-tight text-ink">Sign in</h2>
-          <p className="mt-1.5 text-sm text-slate-500">Choose your role and enter your credentials.</p>
+          <h2 className="font-display text-2xl font-semibold leading-tight tracking-[-0.02em] text-ink">Sign in</h2>
+          <p className="mt-1.5 text-[15px] leading-relaxed text-slate-600">Choose your role and enter your credentials.</p>
 
           <div className="mt-7 flex gap-6 border-b border-rule">
             {ROLES.map((r) => (
@@ -133,7 +139,7 @@ export default function Login() {
                 value={register}
                 onChange={(e) => setRegister(e.target.value)}
                 placeholder={idPlaceholder}
-                className="mt-2 w-full rounded-md border border-rule bg-card px-3.5 py-2.5 text-sm text-ink placeholder:text-slate-400 focus-ring focus:border-brand-400"
+                className="mt-2 w-full rounded-md border border-rule bg-card px-3.5 py-3 text-base text-ink placeholder:text-slate-500 focus-ring focus:border-brand-400"
               />
             </div>
             <div>
@@ -144,7 +150,7 @@ export default function Login() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="Enter your password"
-                  className="w-full rounded-md border border-rule bg-card px-3.5 py-2.5 pr-11 text-sm text-ink placeholder:text-slate-400 focus-ring focus:border-brand-400"
+                  className="w-full rounded-md border border-rule bg-card px-3.5 py-3 pr-11 text-base text-ink placeholder:text-slate-500 focus-ring focus:border-brand-400"
                 />
                 <button
                   type="button"
@@ -163,12 +169,12 @@ export default function Login() {
               </button>
             </div>
 
-            {error && <p className="text-sm text-rose-500">{error}</p>}
+            {error && <p className="text-sm font-medium text-rose-600">{error}</p>}
 
             <button
               type="submit"
               disabled={loading}
-              className="w-full rounded-md bg-ink py-3 font-medium text-paper transition-colors hover:bg-slate-800 focus-ring disabled:opacity-60"
+              className="w-full rounded-md bg-brand-600 py-3 font-medium text-paper transition-colors hover:bg-brand-700 focus-ring disabled:opacity-60"
             >
               {loading ? 'Signing in…' : 'Sign In'}
             </button>

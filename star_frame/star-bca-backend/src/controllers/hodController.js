@@ -4,6 +4,7 @@ const Activity = require('../models/Activity');
 const { sendSuccess, sendError } = require('../utils/response');
 const { logAudit } = require('../utils/audit');
 const { notifySubmissionStatus } = require('../utils/notify');
+const { syncStudentPoints } = require('../services/gamificationService');
 
 const sanitizeSubmission = (submission) => {
   const plainObject = submission?.toObject ? submission.toObject() : { ...submission };
@@ -94,6 +95,8 @@ const approveSubmission = async (req, res, next) => {
     submission.hodVerifiedAt = new Date();
     await submission.save();
 
+    await syncStudentPoints(submission.studentId);
+
     await logAudit(req, {
       action: 'Submission approved by HOD',
       entityType: 'Submission',
@@ -121,6 +124,8 @@ const rejectSubmission = async (req, res, next) => {
     submission.hodVerifiedBy = req.user.id;
     submission.hodVerifiedAt = new Date();
     await submission.save();
+
+    await syncStudentPoints(submission.studentId);
 
     await logAudit(req, {
       action: 'Submission rejected by HOD',
@@ -166,6 +171,9 @@ const bulkApproveSubmissions = async (req, res, next) => {
       approved += 1;
     }
 
+    const affectedStudentIds = [...new Set(submissions.map((s) => s.studentId).filter(Boolean))];
+    await Promise.all(affectedStudentIds.map((id) => syncStudentPoints(id)));
+
     await logAudit(req, {
       action: 'Bulk approved by HOD',
       entityType: 'Submission',
@@ -204,6 +212,9 @@ const bulkRejectSubmissions = async (req, res, next) => {
       await notifySubmissionStatus({ submission, action: 'hod-rejected', actorName: req.user.name });
       rejected += 1;
     }
+
+    const affectedStudentIds = [...new Set(submissions.map((s) => s.studentId).filter(Boolean))];
+    await Promise.all(affectedStudentIds.map((id) => syncStudentPoints(id)));
 
     await logAudit(req, {
       action: 'Bulk rejected by HOD',

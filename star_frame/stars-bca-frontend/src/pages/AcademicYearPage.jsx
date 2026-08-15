@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import Shell from '../components/Shell.jsx'
-import { Button, Card, Field, Input, Select, Toast, LoadingState, ConfirmDialog } from '../components/UI.jsx'
-import { getAcademicSettings, updateAcademicSettings, rolloverAcademicYear } from '../utils/api.js'
+import { Button, Card, Field, Input, Select, Toast, LoadingState, ConfirmDialog, EmptyState } from '../components/UI.jsx'
+import { getAcademicSettings, updateAcademicSettings, rolloverAcademicYear, previewDeadlineNotifications, broadcastDeadlineNotifications } from '../utils/api.js'
 
 /* Hallmark · genre: editorial · macrostructure: Workbench · design-system: design.md · designed-as-app */
 
@@ -16,6 +16,11 @@ export default function AcademicYearPage() {
   const [newYear, setNewYear] = useState('')
   const [targetBatch, setTargetBatch] = useState('')
   const [rolloverLoading, setRolloverLoading] = useState(false)
+  const [broadcastWindow, setBroadcastWindow] = useState(7)
+  const [broadcastPreview, setBroadcastPreview] = useState(null)
+  const [broadcastLoading, setBroadcastLoading] = useState(false)
+  const [broadcasting, setBroadcasting] = useState(false)
+  const [confirmBroadcast, setConfirmBroadcast] = useState(false)
 
   const notify = useCallback((message, tone = 'success') => {
     setToast({ message, tone })
@@ -63,6 +68,32 @@ export default function AcademicYearPage() {
       notify(error.message || 'Unable to roll over the academic year', 'error')
     } finally {
       setRolloverLoading(false)
+    }
+  }
+
+  async function loadBroadcastPreview() {
+    setBroadcastLoading(true)
+    try {
+      const res = await previewDeadlineNotifications(broadcastWindow)
+      setBroadcastPreview(res.data?.items || [])
+    } catch (error) {
+      notify(error.message || 'Unable to preview deadline notifications', 'error')
+    } finally {
+      setBroadcastLoading(false)
+    }
+  }
+
+  async function runBroadcast() {
+    setBroadcasting(true)
+    try {
+      const res = await broadcastDeadlineNotifications(broadcastWindow)
+      const data = res.data || {}
+      notify(`Sent ${data.created?.overdue || 0} overdue, ${data.created?.urgent || 0} important, ${data.created?.warning || 0} upcoming deadline alerts to ${data.studentsNotified || 0} students.`)
+      setConfirmBroadcast(false)
+    } catch (error) {
+      notify(error.message || 'Unable to broadcast deadline notifications', 'error')
+    } finally {
+      setBroadcasting(false)
     }
   }
 
@@ -122,6 +153,56 @@ export default function AcademicYearPage() {
         </Card>
       </div>
 
+      <div className="mt-6">
+        <Card className="p-6">
+          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            <div>
+              <h2 className="font-display text-lg font-semibold text-ink">Deadline alert broadcast</h2>
+              <p className="mt-1 text-sm text-slate-500">Send priority deadline notifications to every student whose activity upload deadline is approaching.</p>
+            </div>
+            <div className="flex flex-wrap items-end gap-3">
+              <Field label="Window (days)">
+                <Select value={String(broadcastWindow)} onChange={(e) => { setBroadcastWindow(Number(e.target.value)); setBroadcastPreview(null) }}>
+                  <option value="3">3 days</option>
+                  <option value="7">7 days</option>
+                  <option value="14">14 days</option>
+                  <option value="30">30 days</option>
+                </Select>
+              </Field>
+              <Button variant="outline" onClick={loadBroadcastPreview} loading={broadcastLoading}>Preview</Button>
+              <Button variant="primary" onClick={() => setConfirmBroadcast(true)}>Broadcast now</Button>
+            </div>
+          </div>
+
+          {broadcastPreview !== null && (
+            <div className="mt-5">
+              {broadcastPreview.length > 0 ? (
+                <div className="space-y-2">
+                  <p className="font-display text-[11px] uppercase tracking-[0.18em] text-slate-400">Upcoming deadlines in the next {broadcastWindow} days</p>
+                  {broadcastPreview.map((item) => (
+                    <div key={String(item.activityId)} className="flex items-center justify-between gap-3 rounded-md border border-rule bg-paper px-4 py-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-ink">{item.activityName}</p>
+                        <p className="font-mono text-[11px] text-slate-400">{item.vertical} · due {new Date(item.deadline).toLocaleDateString()}</p>
+                      </div>
+                      <span className={`shrink-0 rounded-full border px-2.5 py-0.5 font-mono text-[11px] font-medium ${
+                        item.priority === 'Overdue' ? 'border-rose-200 bg-rose-50 text-rose-600'
+                        : item.priority === 'Important' ? 'border-amber-200 bg-amber-50 text-amber-700'
+                        : 'border-brand-200 bg-brand-50 text-brand-700'
+                      }`}>
+                        {item.priority} · {item.daysLeft < 0 ? `${Math.abs(item.daysLeft)}d overdue` : `${item.daysLeft}d left`}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <EmptyState icon="✓" title="Nothing due soon" description={`No activity deadlines fall within the next ${broadcastWindow} days.`} />
+              )}
+            </div>
+          )}
+        </Card>
+      </div>
+
       <ConfirmDialog
         open={!!confirmRollover}
         onClose={() => setConfirmRollover(null)}
@@ -131,6 +212,17 @@ export default function AcademicYearPage() {
         tone="success"
         loading={rolloverLoading}
         onConfirm={runRollover}
+      />
+
+      <ConfirmDialog
+        open={confirmBroadcast}
+        onClose={() => setConfirmBroadcast(false)}
+        title="Broadcast deadline alerts"
+        message={`Send priority deadline notifications to all active students for activities due in the next ${broadcastWindow} days? Students who have already earned approval will be skipped.`}
+        confirmLabel="Broadcast"
+        tone="primary"
+        loading={broadcasting}
+        onConfirm={runBroadcast}
       />
     </Shell>
   )

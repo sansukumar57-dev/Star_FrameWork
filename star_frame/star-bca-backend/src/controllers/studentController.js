@@ -7,8 +7,11 @@ const { sendSuccess, sendError } = require('../utils/response');
 const { calculateSubmissionScore } = require('../utils/scoringEngine');
 const { body, validationResult } = require('express-validator');
 const { reviewSubmission } = require('../services/aiReviewService');
+const { checkForDuplicate, isImageContentType, computeImageHash } = require('../services/duplicateDetectionService');
 const { logAudit } = require('../utils/audit');
 const { createNotification, notifySubmissionStatus } = require('../utils/notify');
+const { scanBuffer } = require('../services/virusScanService');
+const { EARNED_STATUSES } = require('../utils/approvalStatuses');
 
 const EVIDENCE_TYPES = [
   'application/pdf',
@@ -19,16 +22,71 @@ const EVIDENCE_TYPES = [
   'image/webp',
   'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml',
+  'video/mp4',
+  'video/webm',
+  'video/quicktime',
 ];
 
-const EVIDENCE_MAX_BYTES = 5 * 1024 * 1024;
+const EVIDENCE_MAX_BYTES = 100 * 1024 * 1024;
+
+const signatureOf = (buffer) => {
+  if (!buffer || buffer.length < 12) return null;
+  const hex = (offset, length) => buffer.toString('hex', offset, offset + length);
+  if (hex(0, 4) === '25504446') return 'pdf';
+  if (hex(0, 3) === 'ffd8ff') return 'jpeg';
+  if (hex(0, 4) === '89504e47') return 'png';
+  if (buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP') return 'webp';
+  if (buffer.toString('ascii', 4, 8) === 'ftyp') return 'video';
+  if (hex(0, 4) === '1a45dfa3') return 'video';
+  if (buffer.toString('ascii', 0, 4) === 'PK') return 'zip';
+  if (hex(0, 8) === 'd0cf11e0a1b11ae1') return 'ole';
+  return null;
+};
 
 const validateEvidenceFile = (file) => {
   if (!file) return null;
-  const extOk = /\.(pdf|png|jpe?g|webp|docx?)$/i.test(file.originalname || '');
+  const extOk = /\.(pdf|png|jpe?g|webp|docx?|mp4|webm|mov)$/i.test(file.originalname || '');
   const mimeOk = EVIDENCE_TYPES.includes(String(file.mimetype || '').toLowerCase());
-  if (!extOk && !mimeOk) return 'Only PDF, PNG, JPG, WEBP, or Word documents are allowed for evidence';
-  if (file.size > EVIDENCE_MAX_BYTES) return 'File size must be less than 5MB';
+  if (!extOk && !mimeOk) return 'Only PDF, PNG, JPG, WEBP, Word documents, or videos (MP4/WEBM/MOV) are allowed for evidence';
+  if (file.size > EVIDENCE_MAX_BYTES) return 'File size must be less than 100MB';
+
+  const signature = signatureOf(file.buffer);
+  const name = String(file.originalname || '').toLowerCase();
+  if (name.endsWith('.pdf') && signature !== 'pdf') return 'The uploaded PDF file appears to be invalid or corrupted';
+  if (/\.(jpe?g)$/.test(name) && signature !== 'jpeg') return 'The uploaded JPEG file appears to be invalid or corrupted';
+  if (name.endsWith('.png') && signature !== 'png') return 'The uploaded PNG file appears to be invalid or corrupted';
+  if (name.endsWith('.webp') && signature !== 'webp') return 'The uploaded WEBP file appears to be invalid or corrupted';
+  if (/\.(mp4|webm|mov)$/.test(name) && signature !== 'video') return 'The uploaded video file appears to be invalid or corrupted';
+  if (name.endsWith('.docx') && signature !== 'zip') return 'The uploaded DOCX file appears to be invalid or corrupted';
+  if (name.endsWith('.doc') && signature !== 'ole') return 'The uploaded DOC file appears to be invalid or corrupted';
+
+  return null;
+};
+
+const buildEvidenceFile = (req) => {
+  if (!req.file) return null;
+  const originalName = String(req.file.originalname || '').trim();
+  const safeName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const uniqueName = `${req.user?.registerNo || req.user?.registerNumber || 'student'}-${Date.now()}-${safeName}`;
+  return {
+    fileName: uniqueName,
+    originalName: safeName,
+    contentType: req.file.mimetype,
+    data: req.file.buffer,
+    size: req.file.buffer?.length || 0,
+  };
+};
+
+const scanEvidence = async (file) => {
+  if (!file?.buffer) return null;
+  const result = await scanBuffer(file.buffer);
+  if (result.skipped) {
+    console.log(`[scan] ClamAV not configured — ${file.originalname} passed through without scanning`);
+    return null;
+  }
+  if (!result.clean) {
+    return 'The uploaded file was flagged as potentially malicious by the virus scanner and has been rejected';
+  }
   return null;
 };
 
@@ -97,17 +155,11 @@ const submitActivity = async (req, res, next) => {
     if (!errors.isEmpty()) return sendError(res, 400, errors.array()[0].msg);
 
     const { activityId, description, proofUrl, activityType, visitType, durationWeeks, projectUrl, selectedLevel } = req.body;
-    const fileBuffer = req.file?.buffer;
     const fileValidationError = validateEvidenceFile(req.file);
     if (fileValidationError) return sendError(res, 400, fileValidationError);
-    const certificateFile = req.file
-      ? {
-          fileName: req.file.originalname,
-          contentType: req.file.mimetype,
-          data: fileBuffer,
-          size: fileBuffer?.length || 0,
-        }
-      : null;
+    const scanError = await scanEvidence(req.file);
+    if (scanError) return sendError(res, 400, scanError);
+    const certificateFile = buildEvidenceFile(req);
 
     const normalizedActivityType = String(activityType || '').trim().toLowerCase();
     const normalizedVisitType = String(visitType || '').trim().toLowerCase();
@@ -215,11 +267,31 @@ const submitActivity = async (req, res, next) => {
 
     const calculated = calculateSubmissionScore(activity, submissionPayload);
 
+    const certificateHash = certificateFile?.data && isImageContentType(certificateFile.contentType)
+      ? await computeImageHash(certificateFile.data)
+      : null;
+
     const submission = await Submission.create({
       ...submissionPayload,
       suggestedPoints: calculated.suggestedPoints,
       pointsAwarded: 0,
+      certificateImageHash: certificateHash?.structural || '',
+      certificateColorHash: certificateHash?.color || '',
     });
+
+    if (certificateHash) {
+      checkForDuplicate({
+        studentId: req.user.id,
+        activityId: activityObjectId,
+        buffer: certificateFile.data,
+        hash: certificateHash,
+      })
+        .then((result) => {
+          if (!result.checked || !result.isDuplicate || !result.matchedSubmissionId) return;
+          return Submission.updateOne({ _id: submission._id }, { $set: { duplicateOf: result.matchedSubmissionId } });
+        })
+        .catch((error) => console.error('[duplicate] detection failed:', error.message));
+    }
 
     reviewSubmission(submission._id).catch((error) => console.error('[AI] auto review failed:', error.message));
 
@@ -258,7 +330,7 @@ const getMySubmissions = async (req, res, next) => {
 const getEarnedPoints = async (req, res, next) => {
   try {
     const result = await Submission.aggregate([
-      { $match: { studentId: req.user.id, status: 'Approved' } },
+      { $match: { studentId: req.user.id, status: { $in: EARNED_STATUSES } } },
       { $group: { _id: null, totalPoints: { $sum: '$pointsAwarded' } } }
     ]);
 
@@ -268,16 +340,28 @@ const getEarnedPoints = async (req, res, next) => {
   }
 };
 
+const FACULTY_MANAGED_ACTIVITIES = ['Attendance Percentage', 'Semester Exam Percentage', 'Library Usage'];
+
 const getActivities = async (req, res, next) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const safeLimit = Math.max(1, Math.min(limit, 50));
 
-    const [activities, total] = await Promise.all([
-      Activity.find({}).sort({ activityName: 1 }).skip((page - 1) * safeLimit).limit(safeLimit),
-      Activity.countDocuments({})
-    ]);
+    const activityQuery = { activityName: { $nin: FACULTY_MANAGED_ACTIVITIES } };
+    const activitiesAll = await Activity.find(activityQuery);
+
+    const verticalNumber = (value = '') => {
+      const match = String(value).match(/Vertical\s*(\d+)/i);
+      return match ? parseInt(match[1], 10) : 99;
+    };
+    activitiesAll.sort((a, b) => (
+      verticalNumber(a.vertical) - verticalNumber(b.vertical) ||
+      String(a.activityName).localeCompare(String(b.activityName))
+    ));
+
+    const total = activitiesAll.length;
+    const activities = activitiesAll.slice((page - 1) * safeLimit, page * safeLimit);
 
     return sendSuccess(res, 200, 'Activities fetched successfully', { activities, total, page, limit: safeLimit });
   } catch (error) {
@@ -294,12 +378,11 @@ const resubmitActivity = async (req, res, next) => {
     if (!submission) return sendError(res, 404, 'Rejected submission not found');
 
     const { description, proofUrl, selectedLevel } = req.body;
-    const fileBuffer = req.file?.buffer;
     const fileValidationError = validateEvidenceFile(req.file);
     if (fileValidationError) return sendError(res, 400, fileValidationError);
-    const certificateFile = req.file
-      ? { fileName: req.file.originalname, contentType: req.file.mimetype, data: fileBuffer, size: fileBuffer?.length || 0 }
-      : submission.certificateFile;
+    const scanError = await scanEvidence(req.file);
+    if (scanError) return sendError(res, 400, scanError);
+    const certificateFile = req.file ? buildEvidenceFile(req) : submission.certificateFile;
 
     submission.status = 'Pending';
     submission.teacherRemarks = '';
@@ -312,7 +395,36 @@ const resubmitActivity = async (req, res, next) => {
     if (selectedLevel) submission.selectedLevel = selectedLevel;
     if (req.file) submission.certificateFile = certificateFile;
 
+    const certificateHash = req.file && isImageContentType(req.file.mimetype)
+      ? await computeImageHash(req.file.buffer)
+      : null;
+    if (certificateHash) {
+      submission.certificateImageHash = certificateHash.structural;
+      submission.certificateColorHash = certificateHash.color;
+    } else {
+      submission.certificateImageHash = '';
+      submission.certificateColorHash = '';
+      submission.duplicateOf = null;
+    }
+
     await submission.save();
+
+    if (certificateHash) {
+      checkForDuplicate({
+        studentId: req.user.id,
+        activityId: submission.activityId,
+        buffer: req.file.buffer,
+        hash: certificateHash,
+      })
+        .then((result) => {
+          if (!result.checked) return;
+          if (result.isDuplicate && result.matchedSubmissionId) {
+            return Submission.updateOne({ _id: submission._id }, { $set: { duplicateOf: result.matchedSubmissionId } });
+          }
+          return Submission.updateOne({ _id: submission._id }, { $set: { duplicateOf: null } });
+        })
+        .catch((error) => console.error('[duplicate] detection failed:', error.message));
+    }
 
     reviewSubmission(submission._id).catch((error) => console.error('[AI] auto review failed:', error.message));
 
@@ -420,7 +532,7 @@ const markAllNotificationsRead = async (req, res, next) => {
 };
 
 const calculateStreak = async (studentId) => {
-  const subs = await Submission.find({ studentId, status: 'Approved' }).select('verifiedAt createdAt').lean();
+  const subs = await Submission.find({ studentId, status: { $in: EARNED_STATUSES } }).select('verifiedAt createdAt').lean();
   const weekKeys = new Set();
   subs.forEach((sub) => {
     const date = sub.verifiedAt || sub.createdAt;
@@ -448,13 +560,30 @@ const getLeaderboard = async (req, res, next) => {
     const me = await User.findById(req.user.id);
     if (!me) return sendError(res, 404, 'Student profile not found');
 
+    const batchValue = me.semesterBatch || me.batch || '';
+    const yearValue = me.year || '';
+    const requestedScope = String(req.query.scope || 'batch').toLowerCase();
+
     const scopeFilter = { role: 'student', status: 'Active' };
-    if (me.semesterBatch) scopeFilter.semesterBatch = me.semesterBatch;
-    else if (me.batch) scopeFilter.batch = me.batch;
-    else if (me.departmentId) scopeFilter.departmentId = me.departmentId;
+    let scopeLabel = 'all';
+    if (requestedScope === 'department' && me.departmentId) {
+      scopeFilter.departmentId = me.departmentId;
+      scopeLabel = 'department';
+    } else if (requestedScope === 'year' && yearValue) {
+      scopeFilter.$or = [{ year: yearValue }, { semesterBatch: yearValue }, { batch: yearValue }];
+      scopeLabel = 'year';
+    } else if (requestedScope === 'all') {
+      scopeLabel = 'all';
+    } else if (batchValue) {
+      scopeFilter.$or = [{ semesterBatch: batchValue }, { batch: batchValue }];
+      scopeLabel = 'batch';
+    } else if (me.departmentId) {
+      scopeFilter.departmentId = me.departmentId;
+      scopeLabel = 'department';
+    }
 
     const pointRows = await Submission.aggregate([
-      { $match: { status: 'Approved' } },
+      { $match: { status: { $in: EARNED_STATUSES } } },
       { $group: { _id: '$studentId', totalPoints: { $sum: '$pointsAwarded' }, submissions: { $sum: 1 } } },
     ]);
     const pointsById = new Map(pointRows.map((row) => [String(row._id), row]));
@@ -488,7 +617,7 @@ const getLeaderboard = async (req, res, next) => {
       myRank: myEntry?.rank || 0,
       myPoints: myEntry?.totalPoints || pointsById.get(String(req.user.id))?.totalPoints || 0,
       streak,
-      scope: me.semesterBatch ? me.semesterBatch : me.batch ? me.batch : 'department',
+      scope: scopeLabel,
     });
   } catch (error) {
     next(error);
@@ -500,7 +629,7 @@ const getProgressCard = async (req, res, next) => {
     const student = await User.findById(req.user.id).select('-password');
     if (!student) return sendError(res, 404, 'Student profile not found');
 
-    const submissions = await Submission.find({ studentId: req.user.id, status: 'Approved' })
+    const submissions = await Submission.find({ studentId: req.user.id, status: { $in: EARNED_STATUSES } })
       .populate('activityId', 'activityName vertical')
       .sort({ verifiedAt: -1 });
 
@@ -606,7 +735,7 @@ const getDeadlineAlerts = async (req, res, next) => {
 
     const [activities, approved] = await Promise.all([
       Activity.find({ deadline: { $ne: null } }).select('activityName vertical maximumPoints important deadline').lean(),
-      Submission.find({ studentId: req.user.id, status: 'Approved' }).select('activityId').lean(),
+      Submission.find({ studentId: req.user.id, status: { $in: EARNED_STATUSES } }).select('activityId').lean(),
     ]);
     const completedIds = new Set(approved.map((sub) => String(sub.activityId)));
 
@@ -651,6 +780,81 @@ const getDeadlineAlerts = async (req, res, next) => {
   }
 };
 
+const getPointsHistory = async (req, res, next) => {
+  try {
+    const student = await User.findById(req.user.id).select('pointsLedger totalPoints');
+    if (!student) return sendError(res, 404, 'Student not found');
+
+    const ledger = (student.pointsLedger || []).sort((a, b) => new Date(b.date) - new Date(a.date));
+    return sendSuccess(res, 200, 'Points history fetched', { ledger, totalPoints: student.totalPoints || 0 });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const getBookmarks = async (req, res, next) => {
+  try {
+    const student = await User.findById(req.user.id).select('bookmarks').populate('bookmarks', 'activityName vertical maximumPoints deadline');
+    if (!student) return sendError(res, 404, 'Student not found');
+    return sendSuccess(res, 200, 'Bookmarks fetched', { bookmarks: student.bookmarks || [] });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const toggleBookmark = async (req, res, next) => {
+  try {
+    const { activityId } = req.body;
+    if (!activityId) return sendError(res, 400, 'Activity ID is required');
+
+    const student = await User.findById(req.user.id);
+    if (!student) return sendError(res, 404, 'Student not found');
+
+    const idx = student.bookmarks.findIndex((id) => String(id) === String(activityId));
+    if (idx >= 0) {
+      student.bookmarks.splice(idx, 1);
+    } else {
+      student.bookmarks.push(activityId);
+    }
+    await student.save();
+    return sendSuccess(res, 200, idx >= 0 ? 'Bookmark removed' : 'Bookmark added', { bookmarks: student.bookmarks });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const addComment = async (req, res, next) => {
+  try {
+    const { text } = req.body;
+    if (!String(text || '').trim()) return sendError(res, 400, 'Comment text is required');
+
+    const submission = await Submission.findById(req.params.id);
+    if (!submission) return sendError(res, 404, 'Submission not found');
+
+    const user = await User.findById(req.user.id).select('name role accountType');
+    submission.comments.push({
+      authorId: req.user.id,
+      authorName: user?.name || 'Unknown',
+      authorRole: user?.accountType || user?.role || 'student',
+      text: String(text).trim(),
+    });
+    await submission.save();
+    return sendSuccess(res, 200, 'Comment added', submission.comments);
+  } catch (error) {
+    next(error);
+  }
+};
+
+const getComments = async (req, res, next) => {
+  try {
+    const submission = await Submission.findById(req.params.id).select('comments');
+    if (!submission) return sendError(res, 404, 'Submission not found');
+    return sendSuccess(res, 200, 'Comments fetched', submission.comments || []);
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getProfile,
   updateProfile,
@@ -666,5 +870,10 @@ module.exports = {
   getLeaderboard,
   getProgressCard,
   getDeadlineAlerts,
+  getPointsHistory,
+  getBookmarks,
+  toggleBookmark,
+  addComment,
+  getComments,
   studentValidators,
 };

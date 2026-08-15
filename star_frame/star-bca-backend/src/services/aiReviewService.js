@@ -1,41 +1,7 @@
 const Submission = require('../models/Submission');
 const Activity = require('../models/Activity');
 const { calculateSubmissionScore } = require('../utils/scoringEngine');
-
-const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
-
-function getProvider() {
-  const requested = String(process.env.AI_PROVIDER || '').toLowerCase();
-  if ((requested === 'openai' || requested === '') && process.env.OPENAI_API_KEY) return 'openai';
-  if ((requested === 'gemini' || requested === '') && process.env.GEMINI_API_KEY) return 'gemini';
-  if ((requested === 'groq' || requested === '') && process.env.GROQ_API_KEY) return 'groq';
-  if (process.env.OPENAI_API_KEY) return 'openai';
-  if (process.env.GEMINI_API_KEY) return 'gemini';
-  if (process.env.GROQ_API_KEY) return 'groq';
-  return null;
-}
-
-function providerConfig(provider) {
-  if (provider === 'openai') {
-    return {
-      label: 'OpenAI',
-      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-    };
-  }
-  if (provider === 'gemini') {
-    return {
-      label: 'Google Gemini',
-      model: process.env.GEMINI_MODEL || 'gemini-1.5-flash',
-    };
-  }
-  if (provider === 'groq') {
-    return {
-      label: 'Groq',
-      model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
-    };
-  }
-  return { label: 'Rule Engine', model: 'rule-based-fallback' };
-}
+const { complete, getProvider } = require('./llmService');
 
 function clampPoints(value, maxPoints) {
   const parsed = Number(value);
@@ -48,22 +14,6 @@ function normalizeRecommendation(value) {
   if (key.startsWith('approv')) return 'Approve';
   if (key.startsWith('reject')) return 'Reject';
   return 'Review';
-}
-
-function extractJson(raw) {
-  if (!raw) return null;
-  const text = String(raw).trim();
-  try {
-    return JSON.parse(text);
-  } catch (error) {
-    const match = text.match(/\{[\s\S]*\}/);
-    if (!match) return null;
-    try {
-      return JSON.parse(match[0]);
-    } catch (error2) {
-      return null;
-    }
-  }
 }
 
 function buildPrompt(activity, submission) {
@@ -116,136 +66,28 @@ Return STRICT JSON only, with exactly this shape:
   "flags": ["<concern or note>"]
 }`;
 
-async function callOpenAI(data, submission) {
-  const model = providerConfig('openai').model;
+async function runLlmReview(activity, submission) {
+  const data = buildPrompt(activity, submission);
   const image = submission?.certificateFile;
-  const hasImage = Boolean(image?.data && image?.contentType?.startsWith('image/') && image.data.length <= MAX_IMAGE_BYTES);
 
-  const content = [
-    { type: 'text', text: `Review this STAR framework submission as JSON:\n${JSON.stringify(data, null, 2)}` },
-  ];
-  if (hasImage) {
-    content.push({
-      type: 'image_url',
-      image_url: {
-        url: `data:${image.contentType};base64,${image.data.toString('base64')}`,
-      },
-    });
-  }
-
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model,
-      response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content },
-      ],
-      temperature: 0.2,
-    }),
+  const result = await complete({
+    system: SYSTEM_PROMPT,
+    user: `Review this STAR framework submission as JSON:\n${JSON.stringify(data, null, 2)}`,
+    image: image?.data
+      ? { data: image.data, contentType: image.contentType || 'application/octet-stream' }
+      : null,
+    json: true,
+    temperature: 0.2,
+    maxTokens: 2048,
+    timeoutMs: 30000,
+    retries: 1,
   });
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`OpenAI request failed (${response.status}): ${text.slice(0, 300)}`);
-  }
-
-  const json = await response.json();
-  const parsed = extractJson(json?.choices?.[0]?.message?.content);
-  if (!parsed) throw new Error('OpenAI returned an unparseable response');
-
-  return { ...parsed, provider: 'openai', model };
-}
-
-async function callGemini(data, submission) {
-  const model = providerConfig('gemini').model;
-  const key = process.env.GEMINI_API_KEY;
-  const image = submission?.certificateFile;
-  const hasImage = Boolean(image?.data && image?.contentType?.startsWith('image/') && image.data.length <= MAX_IMAGE_BYTES);
-
-  const parts = [
-    { text: `Review this STAR framework submission as JSON:\n${JSON.stringify(data, null, 2)}` },
-  ];
-  if (hasImage) {
-    parts.push({
-      inline_data: {
-        mime_type: image.contentType,
-        data: image.data.toString('base64'),
-      },
-    });
-  }
-
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-      contents: [{ role: 'user', parts }],
-      generationConfig: { temperature: 0.2, responseMimeType: 'application/json' },
-    }),
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Gemini request failed (${response.status}): ${text.slice(0, 300)}`);
-  }
-
-  const json = await response.json();
-  const raw = json?.candidates?.[0]?.content?.parts?.map((part) => part.text).join('') || '';
-  const parsed = extractJson(raw);
-  if (!parsed) throw new Error('Gemini returned an unparseable response');
-
-  return { ...parsed, provider: 'gemini', model };
-}
-
-async function callGroq(data, submission) {
-  const model = providerConfig('groq').model;
-  const image = submission?.certificateFile;
-  const supportsVision = String(model).toLowerCase().includes('vision');
-  const hasImage = supportsVision && Boolean(image?.data && image?.contentType?.startsWith('image/') && image.data.length <= MAX_IMAGE_BYTES);
-
-  const content = [
-    { type: 'text', text: `Review this STAR framework submission as JSON:\n${JSON.stringify(data, null, 2)}` },
-  ];
-  if (hasImage) {
-    content.push({
-      type: 'image_url',
-      image_url: { url: `data:${image.contentType};base64,${image.data.toString('base64')}` },
-    });
-  }
-
-  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model,
-      response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content },
-      ],
-      temperature: 0.2,
-    }),
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Groq request failed (${response.status}): ${text.slice(0, 300)}`);
-  }
-
-  const json = await response.json();
-  const parsed = extractJson(json?.choices?.[0]?.message?.content);
-  if (!parsed) throw new Error('Groq returned an unparseable response');
-
-  return { ...parsed, provider: 'groq', model };
+  return {
+    ...result.parsed,
+    provider: result.provider,
+    model: result.model,
+  };
 }
 
 function ruleBasedReview(activity, submission) {
@@ -301,16 +143,6 @@ function ruleBasedReview(activity, submission) {
   };
 }
 
-function fallbackReasonFor(provider, error) {
-  const message = String(error?.message || '');
-  const statusMatch = message.match(/\((\d{3})\)/);
-  const status = statusMatch ? statusMatch[1] : '';
-  if (message.includes('invalid_api_key') || message.toLowerCase().includes('incorrect api key')) {
-    return `${provider} API key rejected — add a valid key in .env or the system environment`;
-  }
-  return `${provider} unavailable${status ? ` (HTTP ${status})` : ''}`;
-}
-
 async function reviewSubmission(submissionId) {
   const submission = await Submission.findById(submissionId);
   if (!submission) throw new Error('Submission not found');
@@ -318,32 +150,17 @@ async function reviewSubmission(submissionId) {
   const activity = await Activity.findById(submission.activityId);
   if (!activity) throw new Error('Activity not found');
 
-  const data = buildPrompt(activity, submission);
   const maxPoints = Number(activity.maximumPoints || 0);
   const provider = getProvider();
 
   let review;
   let fallbackReason = '';
-  if (provider === 'openai') {
+  if (provider) {
     try {
-      review = await callOpenAI(data, submission);
+      review = await runLlmReview(activity, submission);
     } catch (error) {
-      fallbackReason = fallbackReasonFor('OpenAI', error);
-      console.error('[AI] OpenAI review failed, falling back to rule engine:', error.message);
-    }
-  } else if (provider === 'gemini') {
-    try {
-      review = await callGemini(data, submission);
-    } catch (error) {
-      fallbackReason = fallbackReasonFor('Gemini', error);
-      console.error('[AI] Gemini review failed, falling back to rule engine:', error.message);
-    }
-  } else if (provider === 'groq') {
-    try {
-      review = await callGroq(data, submission);
-    } catch (error) {
-      fallbackReason = fallbackReasonFor('Groq', error);
-      console.error('[AI] Groq review failed, falling back to rule engine:', error.message);
+      fallbackReason = error.message;
+      console.error('[AI] review failed, falling back to rule engine:', error.message);
     }
   }
 

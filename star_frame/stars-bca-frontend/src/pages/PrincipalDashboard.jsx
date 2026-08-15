@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react'
 import { BarChart, Bar, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import Shell from '../components/Shell.jsx'
+import Shell, { NAV } from '../components/Shell.jsx'
 import { StatCard, Button, PageHeader, Card, Toast, ConfirmDialog, Field, Input, Select, EmptyState, StatusBadge, LoadingState } from '../components/UI.jsx'
+import AiInsightsPanel from '../components/AiInsightsPanel.jsx'
 import {
   getAdminUsers,
   getLookups,
@@ -13,6 +14,8 @@ import {
   resetUserPassword,
   exportAdminUsers,
   exportAnalytics,
+  downloadAdminReport,
+  getDepartmentAiSummary,
 } from '../utils/api.js'
 
 /* Hallmark · genre: editorial · macrostructure: Workbench · design-system: design.md · designed-as-app */
@@ -67,6 +70,9 @@ export default function PrincipalDashboard() {
   const [confirm, setConfirm] = useState(null)
   const [exportingUsers, setExportingUsers] = useState(false)
   const [exportingAnalytics, setExportingAnalytics] = useState(false)
+  const [reporting, setReporting] = useState(false)
+  const [aiSummary, setAiSummary] = useState('')
+  const [aiSummaryLoading, setAiSummaryLoading] = useState(false)
 
   const currentUser = useMemo(() => {
     try {
@@ -98,8 +104,24 @@ export default function PrincipalDashboard() {
     }
   }
 
+  async function handleReport() {
+    setReporting(true)
+    try {
+      await downloadAdminReport()
+    } catch (error) {
+      notify(error.message || 'Unable to download report', 'error')
+    } finally {
+      setReporting(false)
+    }
+  }
+
   const isDean = currentUser?.accountType === 'dean'
   const isHod = currentUser?.accountType === 'hod'
+
+  const deanNav = useMemo(() => {
+    if (!isDean) return null
+    return NAV.principal.filter((link) => link.to !== '/principal/bulk-upload')
+  }, [isDean])
 
   const notify = useCallback((message, tone = 'success') => {
     setToast({ message, tone })
@@ -110,8 +132,21 @@ export default function PrincipalDashboard() {
     loadUsers()
     loadLookups()
     loadAnalytics()
+    loadAiSummary()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  async function loadAiSummary() {
+    try {
+      setAiSummaryLoading(true)
+      const data = await getDepartmentAiSummary()
+      setAiSummary(data.data?.summary || '')
+    } catch {
+      setAiSummary('AI department summary is unavailable right now.')
+    } finally {
+      setAiSummaryLoading(false)
+    }
+  }
 
   async function loadUsers() {
     try {
@@ -418,14 +453,14 @@ export default function PrincipalDashboard() {
 
   if (loading) {
     return (
-      <Shell role="principal" userName={currentUser.name || 'Admin'} department={currentUser.department || 'User Management'}>
+      <Shell role={isHod ? 'hod' : 'principal'} userName={currentUser.name || 'Admin'} department={currentUser.department || 'User Management'} navLinks={deanNav}>
         <LoadingState rows={3} />
       </Shell>
     )
   }
 
   return (
-    <Shell role="principal" userName={currentUser.name || 'Admin'} department={currentUser.department || 'User Management'}>
+    <Shell role={isHod ? 'hod' : 'principal'} userName={currentUser.name || 'Admin'} department={currentUser.department || 'User Management'} navLinks={deanNav}>
       <PageHeader
         title={isDean ? 'Dean Dashboard' : 'Admin Dashboard'}
         subtitle={
@@ -435,6 +470,7 @@ export default function PrincipalDashboard() {
         }
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            {!isDean && <Button variant="outline" onClick={handleReport} loading={reporting}>⬇ PDF Report</Button>}
             <Button variant="outline" onClick={handleExportAnalytics} loading={exportingAnalytics}>⬇ Export Analytics</Button>
             <Button variant="outline" onClick={handleExportUsers} loading={exportingUsers}>⬇ Export Users</Button>
           </div>
@@ -485,6 +521,19 @@ export default function PrincipalDashboard() {
               )}
             </div>
           </Card>
+
+          <Card className="p-5">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <h2 className="font-display text-lg font-semibold text-ink">AI Department Summary</h2>
+                <p className="text-sm text-slate-400 mt-1">Generated from recent department analytics.</p>
+              </div>
+              <Button variant="outline" size="sm" onClick={loadAiSummary} loading={aiSummaryLoading}>Refresh</Button>
+            </div>
+            {aiSummaryLoading ? <LoadingState rows={2} /> : <p className="text-sm leading-7 text-slate-600">{aiSummary || 'AI summary is not available yet.'}</p>}
+          </Card>
+
+          <AiInsightsPanel />
 
           {isDean && (
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">

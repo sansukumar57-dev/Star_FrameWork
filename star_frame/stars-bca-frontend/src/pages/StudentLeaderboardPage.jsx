@@ -1,19 +1,28 @@
 import React, { useEffect, useState } from 'react'
-import { Button, Card, EmptyState, LoadingState, Toast } from '../components/UI.jsx'
+import { Button, Card, EmptyState, LoadingState, Select, Toast } from '../components/UI.jsx'
 import { getStudentLeaderboard } from '../utils/api.js'
 
 /* Hallmark · genre: editorial · macrostructure: Workbench · design-system: design.md · designed-as-app */
 
+const SCOPE_OPTIONS = [
+  { value: 'batch', label: 'My batch' },
+  { value: 'department', label: 'My department' },
+  { value: 'year', label: 'My year' },
+  { value: 'all', label: 'All students' },
+]
+
 export default function StudentLeaderboardPage() {
-  const [leaderboard, setLeaderboard] = useState({ students: [], myRank: null })
+  const [leaderboard, setLeaderboard] = useState({ students: [], myRank: 0, myPoints: 0 })
+  const [scope, setScope] = useState('batch')
   const [loading, setLoading] = useState(true)
   const [toast, setToast] = useState('')
 
   useEffect(() => {
+    setLoading(true)
     async function load() {
       try {
-        const res = await getStudentLeaderboard()
-        setLeaderboard(res.data || { students: [], myRank: null })
+        const res = await getStudentLeaderboard(scope)
+        setLeaderboard(res.data || { students: [], myRank: 0, myPoints: 0 })
       } catch (error) {
         setToast(error.message || 'Unable to load leaderboard')
       } finally {
@@ -21,9 +30,11 @@ export default function StudentLeaderboardPage() {
       }
     }
     load()
-  }, [])
+  }, [scope])
 
   if (loading) return <LoadingState rows={4} />
+
+  const activeScopeLabel = SCOPE_OPTIONS.find((option) => option.value === scope)?.label || 'All students'
 
   return (
     <div className="space-y-6">
@@ -32,19 +43,26 @@ export default function StudentLeaderboardPage() {
       <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
           <h1 className="font-display text-2xl font-semibold leading-tight tracking-tight text-ink md:text-3xl">Leaderboard</h1>
-          <p className="mt-1.5 text-sm text-slate-500">Your classmates ranked by approved STAR points.</p>
+          <p className="mt-1.5 text-sm text-slate-500">Students ranked by approved STAR points — filtered to {activeScopeLabel.toLowerCase()}.</p>
         </div>
-        <Button variant="outline" onClick={() => window.location.reload()}>Refresh</Button>
+        <div className="flex items-center gap-2">
+          <Select value={scope} onChange={(event) => setScope(event.target.value)} aria-label="Leaderboard scope" className="w-44">
+            {SCOPE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </Select>
+          <Button variant="outline" onClick={() => window.location.reload()}>Refresh</Button>
+        </div>
       </div>
 
-      {leaderboard.myRank && (
+      {leaderboard.myRank > 0 && (
         <div className="grid grid-cols-2 gap-4">
           <Card className="p-4 text-center">
-            <p className="font-display text-3xl font-semibold text-ink">#{leaderboard.myRank.rank}</p>
+            <p className="font-display text-3xl font-semibold text-ink">#{leaderboard.myRank}</p>
             <p className="mt-1 text-xs uppercase tracking-[0.16em] text-slate-400">Your Rank</p>
           </Card>
           <Card className="p-4 text-center">
-            <p className="font-display text-3xl font-semibold text-ink">{leaderboard.myRank.totalPoints || 0}</p>
+            <p className="font-display text-3xl font-semibold text-ink">{leaderboard.myPoints || 0}</p>
             <p className="mt-1 text-xs uppercase tracking-[0.16em] text-slate-400">Approved Points</p>
           </Card>
         </div>
