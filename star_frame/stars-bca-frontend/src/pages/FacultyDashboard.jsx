@@ -1,10 +1,12 @@
-import React, { useEffect, useMemo, useState, useCallback } from 'react'
+import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import * as XLSX from 'xlsx'
+import { Routes, Route, Navigate } from 'react-router-dom'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell } from 'recharts'
 import Shell from '../components/Shell.jsx'
 import { StatCard, StatusBadge, Modal, Button, PageHeader, Card, Toast, EmptyState, LoadingState, Field, Input, Textarea, Select, ConfirmDialog } from '../components/UI.jsx'
 import CommentThread from '../components/CommentThread.jsx'
-import { getTeacherDashboard, getTeacherSubmissions, getTeacherStudents, updateTeacherStudentRecords, bulkUpdateTeacherStudentRecords, approveSubmission, rejectSubmission, getSubmissionFileBlob, runAiReview, applyAiReview, bulkApproveSubmissions, bulkRejectSubmissions, exportTeacherSubmissions, downloadTeacherReport, bulkImportStudents, getAiClearedCount, autoApproveAiCleared } from '../utils/api.js'
+import FacultyProfileModal from './FacultyProfileModal.jsx'
+import { getTeacherDashboard, getTeacherSubmissions, getTeacherStudents, updateTeacherStudentRecords, bulkUpdateTeacherStudentRecords, deleteTeacherStudent, approveSubmission, rejectSubmission, getSubmissionFileBlob, runAiReview, applyAiReview, bulkApproveSubmissions, bulkRejectSubmissions, exportTeacherSubmissions, downloadTeacherReport, bulkImportStudents, getAiClearedCount, autoApproveAiCleared } from '../utils/api.js'
 
 /* Hallmark · genre: editorial · macrostructure: Workbench · design-system: design.md · designed-as-app */
 
@@ -36,6 +38,12 @@ function pointsStateLabel(sub) {
   return 'Suggested marks'
 }
 
+function daysWaiting(sub) {
+  if (!sub?.submittedAt) return 0
+  const diff = Date.now() - new Date(sub.submittedAt).getTime()
+  return Math.max(0, Math.floor(diff / 86400000))
+}
+
 function PointsTag({ sub }) {
   const status = sub?.status
   if (isAwarded(sub)) {
@@ -53,7 +61,99 @@ const STATUS_TABS = [
   { key: 'Rejected', label: 'Rejected' },
 ]
 
+const REMARK_TEMPLATES = [
+  { label: 'Approve', text: 'Evidence verified and meets the activity requirements. Well done — keep it up.' },
+  { label: 'Good work', text: 'Clear, verifiable evidence submitted. Good effort — continue building your STAR portfolio.' },
+  { label: 'Minor fixes', text: 'Evidence is mostly complete, but please provide a clearer, dated proof (certificate/screenshot) for this activity.' },
+  { label: 'Reject', text: 'The submitted evidence does not clearly match the activity requirements. Please re-read the activity description and resubmit with appropriate proof.' },
+]
+
+const VERTICAL_FILLS = ['var(--color-brand-500)', 'var(--color-leaf-500)', 'var(--color-amber-500)', 'var(--color-rose-400)', 'var(--color-sky-500)', 'var(--color-violet-500)', 'var(--color-slate-500)', 'var(--color-teal-500)']
+
 export default function FacultyDashboard() {
+  const currentUser = React.useMemo(() => {
+    try { return JSON.parse(localStorage.getItem('stars_user') || '{}') } catch { return {} }
+  }, [])
+  const [pendingCount, setPendingCount] = useState(0)
+  const [aiClearedBadge, setAiClearedBadge] = useState(0)
+  const [profileOpen, setProfileOpen] = useState(false)
+  const [facultyName, setFacultyName] = useState(currentUser.name || 'Faculty')
+
+  useEffect(() => {
+    getTeacherDashboard().then((res) => setPendingCount(res.data?.pending ?? 0)).catch(() => {})
+    getAiClearedCount().then((res) => setAiClearedBadge(res.data?.count || 0)).catch(() => {})
+  }, [])
+
+  function handleProfileUpdate(updated) {
+    const nextName = updated?.name || facultyName
+    setFacultyName(nextName)
+    try {
+      const saved = JSON.parse(localStorage.getItem('stars_user') || '{}')
+      localStorage.setItem('stars_user', JSON.stringify({ ...saved, name: nextName }))
+    } catch { /* ignore */ }
+  }
+
+  return (
+    <Shell role="faculty" userName={facultyName} department={currentUser.department || 'Department'} profileTrigger={() => setProfileOpen(true)} badges={{ '/faculty/reviews': pendingCount }}>
+      <Routes>
+        <Route path="" element={<FacultyHome />} />
+        <Route path="reviews" element={<ReviewsPage aiClearedBadge={aiClearedBadge} setAiClearedBadge={setAiClearedBadge} setPendingCount={setPendingCount} />} />
+        <Route path="*" element={<Navigate to="/faculty" replace />} />
+      </Routes>
+      <Modal open={profileOpen} onClose={() => setProfileOpen(false)} title="">
+        <FacultyProfileModal user={currentUser} onProfileUpdate={handleProfileUpdate} />
+      </Modal>
+    </Shell>
+  )
+}
+
+function FacultyHome() {
+  const [stats, setStats] = useState({ pending: 0, approved: 0, rejected: 0, totalStudents: 0, topStudents: [] })
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    getTeacherDashboard()
+      .then((res) => setStats(res.data))
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [])
+
+  if (loading) return <LoadingState rows={3} />
+
+  return (
+    <div className="space-y-6">
+      <PageHeader title="Faculty Dashboard" subtitle="Overview of your review queue and student performance." />
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <StatCard label="Pending Reviews" value={stats.pending} sub="Awaiting your action" accent="amber" />
+        <StatCard label="Approved Tasks" value={stats.approved} sub="This term" accent="leaf" />
+        <StatCard label="Rejected Tasks" value={stats.rejected} sub="Needs resubmission" accent="rose" />
+        <StatCard label="Total Students" value={stats.totalStudents} sub="Registered learners" accent="brand" />
+      </div>
+      {(stats.topStudents || []).length > 0 && (
+        <Card className="p-5">
+          <h2 className="font-display text-lg font-semibold text-ink mb-3">Top Students</h2>
+          <p className="text-sm text-slate-400 mb-3">Ranked by approved STAR points.</p>
+          <div className="space-y-2">
+            {stats.topStudents.map((student, index) => (
+              <div key={student._id} className="flex items-center justify-between rounded-md border border-rule px-3 py-2.5 text-sm">
+                <div className="flex min-w-0 items-center gap-2.5">
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-ink font-mono text-[10px] font-medium text-paper">{index + 1}</span>
+                  <div className="min-w-0">
+                    <p className="truncate font-medium text-ink">{student.name}</p>
+                    <p className="font-mono text-[11px] text-slate-400">{student.registerNumber || student.section || ''}</p>
+                  </div>
+                </div>
+                <span className="shrink-0 font-display text-lg font-semibold text-ink">{student.totalPoints || 0}<span className="text-xs font-normal text-slate-400"> pts</span></span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+    </div>
+  )
+}
+
+function ReviewsPage({ setAiClearedBadge, setPendingCount }) {
   const [submissions, setSubmissions] = useState([])
   const [stats, setStats] = useState({ pending: 0, approved: 0, rejected: 0, totalStudents: 0, totalPointsAwarded: 0, topStudents: [] })
   const [reviewing, setReviewing] = useState(null)
@@ -77,8 +177,11 @@ export default function FacultyDashboard() {
   const [recordForm, setRecordForm] = useState({ attendancePercentage: '', semesterPercentage: '', libraryUsage: '' })
   const [savingRecords, setSavingRecords] = useState(false)
   const [bulkUploading, setBulkUploading] = useState(false)
+  const [deletingStudent, setDeletingStudent] = useState(null)
+  const [deleteLoading, setDeleteLoading] = useState(false)
   const [aiClearedCount, setAiClearedCount] = useState(0)
   const [aiAutoApproving, setAiAutoApproving] = useState(false)
+  const [reviewTab, setReviewTab] = useState('evidence')
 
   const currentUser = React.useMemo(() => {
     try { return JSON.parse(localStorage.getItem('stars_user') || '{}') } catch { return {} }
@@ -93,19 +196,22 @@ export default function FacultyDashboard() {
   useEffect(() => {
     let active = true
     loadCurrent()
+      .then((res) => { if (active && res) setPendingCount(res?.pending ?? 0) })
       .catch((error) => { if (active) setToast({ message: error.message || 'Unable to load submissions', tone: 'error' }) })
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false }
-  }, [statusFilter, search, loadCurrent])
+  }, [statusFilter, search, loadCurrent, setPendingCount])
 
   const loadAiClearedCount = useCallback(async () => {
     try {
       const data = await getAiClearedCount()
-      setAiClearedCount(data.data?.count || 0)
+      const count = data.data?.count || 0
+      setAiClearedCount(count)
+      setAiClearedBadge(count)
     } catch {
       setAiClearedCount(0)
     }
-  }, [])
+  }, [setAiClearedBadge])
 
   const loadRecords = useCallback(async () => {
     try {
@@ -126,6 +232,17 @@ export default function FacultyDashboard() {
     { name: 'Approved', pct: stats.approved, fill: 'var(--color-leaf-500)' },
     { name: 'Rejected', pct: stats.rejected, fill: 'var(--color-rose-500)' },
   ]
+
+  const verticalChartData = useMemo(() => {
+    const counts = new Map()
+    submissions.forEach((sub) => {
+      const vertical = sub.activityId?.vertical || sub.vertical || 'Other'
+      counts.set(vertical, (counts.get(vertical) || 0) + 1)
+    })
+    return Array.from(counts.entries())
+      .map(([name, count], index) => ({ name, count, fill: VERTICAL_FILLS[index % VERTICAL_FILLS.length] }))
+      .sort((a, b) => b.count - a.count)
+  }, [submissions])
 
   const groupedSubmissions = useMemo(() => {
     const groups = []
@@ -202,7 +319,7 @@ export default function FacultyDashboard() {
   async function handleExport() {
     setExporting(true)
     try {
-      await exportTeacherSubmissions('Pending')
+      await exportTeacherSubmissions(statusFilter)
     } catch (error) {
       setToast({ message: error.message || 'Export failed', tone: 'error' })
     } finally {
@@ -281,6 +398,22 @@ export default function FacultyDashboard() {
       setToast({ message: error.message || 'Unable to save student records', tone: 'error' })
     } finally {
       setSavingRecords(false)
+    }
+  }
+
+  async function handleDeleteStudent() {
+    if (!deletingStudent) return
+    setDeleteLoading(true)
+    try {
+      await deleteTeacherStudent(deletingStudent._id)
+      setRecords((prev) => prev.filter((student) => student._id !== deletingStudent._id))
+      setToast({ message: `${deletingStudent.name || 'Student'} deleted successfully.`, tone: 'success' })
+      setDeletingStudent(null)
+      loadCurrent().catch(() => {})
+    } catch (error) {
+      setToast({ message: error.message || 'Unable to delete student', tone: 'error' })
+    } finally {
+      setDeleteLoading(false)
     }
   }
 
@@ -379,6 +512,7 @@ export default function FacultyDashboard() {
     setReviewing(sub)
     setScore(String(pointsFor(sub)))
     setRemarks('')
+    setReviewTab('evidence')
   }
 
   function selectReview(event) {
@@ -391,7 +525,7 @@ export default function FacultyDashboard() {
     }
   }
 
-  async function decide(status) {
+  const decide = useCallback(async (status) => {
     if (!reviewing) return
     const id = reviewing._id
 
@@ -409,7 +543,7 @@ export default function FacultyDashboard() {
     } catch (error) {
       setToast({ message: error.message || 'Review action failed', tone: 'error' })
     }
-  }
+  }, [reviewing, score, remarks, loadCurrent])
 
   async function openEvidence(submissionId) {
     try {
@@ -465,29 +599,40 @@ export default function FacultyDashboard() {
       setReviewing((prev) => ({ ...prev, ...updated }))
       setSubmissions((prev) => prev.map((s) => (s._id === updated._id ? { ...s, ...updated } : s)))
       setScore(String(updated.suggestedPoints ?? 0))
-      setRemarks(updated.teacherRemarks || '')
+      setRemarks(updated.aiReview?.reasoning || updated.teacherRemarks || '')
       setToast({ message: 'AI suggestion applied — review and confirm before approving.', tone: 'success' })
     } catch (error) {
       setToast({ message: error.message || 'Could not apply AI suggestion', tone: 'error' })
     }
   }
 
-  if (loading) {
-    return (
-      <Shell role="faculty" userName={currentUser.name || 'Faculty'} department={currentUser.department || 'Department'}>
-        <LoadingState rows={4} />
-      </Shell>
-    )
-  }
+  const decideRef = useRef(decide)
+  useEffect(() => {
+    decideRef.current = decide
+  }, [decide])
+
+  useEffect(() => {
+    if (!reviewing) return
+    function handleKeyDown(event) {
+      if (event.target.tagName === 'INPUT' || event.target.tagName === 'TEXTAREA' || event.target.tagName === 'SELECT') return
+      if ((event.metaKey || event.ctrlKey) || event.altKey) return
+      if (event.key === 'a' || event.key === 'A') decideRef.current('Approved')
+      if (event.key === 'r' || event.key === 'R') decideRef.current('Rejected')
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [reviewing])
+
+  if (loading) return <LoadingState rows={4} />
 
   return (
-    <Shell role="faculty" userName={currentUser.name || 'Faculty'} department={currentUser.department || 'Department'} badges={{ '/faculty/reviews': stats.pending }}>
+    <div>
       <PageHeader
-        title="Faculty Review Dashboard"
+        title="Review Submissions"
         subtitle="Verify evidence, score submissions, and keep student STAR records up to date."
         actions={
           <>
-            <Button variant="success" onClick={handleAutoApproveAi} loading={aiAutoApproving} disabled={aiClearedCount === 0}>⚡ Auto-approve AI</Button>
+            <Button variant="success" onClick={handleAutoApproveAi} loading={aiAutoApproving} disabled={aiClearedCount === 0}>⚡ Auto-approve AI{aiClearedCount > 0 ? ` (${aiClearedCount})` : ''}</Button>
             <Button variant="outline" onClick={handleReport} loading={exporting}>⬇ PDF Report</Button>
             <Button variant="outline" onClick={handleExport} loading={exporting}>⬇ Export Excel</Button>
           </>
@@ -496,7 +641,7 @@ export default function FacultyDashboard() {
 
       {toast && <Toast message={toast.message} tone={toast.tone} onDismiss={() => setToast(null)} />}
 
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-8 mt-6">
         <StatCard label="Pending Reviews" value={stats.pending} sub="Awaiting your action" accent="amber" />
         <StatCard label="Approved Tasks" value={stats.approved} sub="This term" accent="leaf" />
         <StatCard label="Rejected Tasks" value={stats.rejected} sub="Needs resubmission" accent="rose" />
@@ -538,6 +683,9 @@ export default function FacultyDashboard() {
             <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-brand-200 bg-brand-50/70 px-4 py-3">
               <p className="text-sm font-medium text-ink">{selectedIds.length} selected</p>
               <div className="flex items-center gap-2">
+                <Button size="sm" variant="ghost" onClick={toggleSelectAll}>
+                  {allSelected ? 'Deselect all' : 'Select all pending'}
+                </Button>
                 <Button size="sm" variant="outline" onClick={() => setSelectedIds([])}>Clear</Button>
                 <Button size="sm" variant="danger" onClick={() => setBulkConfirm({ action: 'Rejected' })}>Reject selected</Button>
                 <Button size="sm" variant="success" onClick={() => setBulkConfirm({ action: 'Approved' })}>Approve selected</Button>
@@ -563,6 +711,7 @@ export default function FacultyDashboard() {
                     <th className="text-left font-medium px-5 py-3">Task</th>
                     <th className="text-left font-medium px-5 py-3">Status</th>
                     <th className="text-left font-medium px-5 py-3">Points</th>
+                    <th className="text-left font-medium px-5 py-3">Waiting</th>
                     <th className="text-right font-medium px-5 py-3"></th>
                   </tr>
                 </thead>
@@ -638,6 +787,18 @@ export default function FacultyDashboard() {
                               </span>
                             )}
                           </td>
+                          <td className="px-5 py-3">
+                            {isMultiSubmission ? (
+                              <span className="text-slate-400">—</span>
+                            ) : (() => {
+                              const days = daysWaiting(group.submissions[0])
+                              return days > 3 ? (
+                                <span className="inline-flex items-center rounded-full bg-rose-50 px-2 py-0.5 font-mono text-[10px] font-medium text-rose-600">{days}d</span>
+                              ) : (
+                                <span className="font-mono text-[11px] text-slate-400">{days}d</span>
+                              )
+                            })()}
+                          </td>
                           <td className="px-5 py-3 text-right">
                             {!isMultiSubmission && (
                               <Button size="sm" variant="outline" onClick={() => openReview(group.submissions[0])}>Review</Button>
@@ -678,6 +839,16 @@ export default function FacultyDashboard() {
                                 <PointsTag sub={submission} />
                               </span>
                             </td>
+                            <td className="px-5 py-3">
+                              {(() => {
+                                const days = daysWaiting(submission)
+                                return days > 3 ? (
+                                  <span className="inline-flex items-center rounded-full bg-rose-50 px-2 py-0.5 font-mono text-[10px] font-medium text-rose-600">{days}d</span>
+                                ) : (
+                                  <span className="font-mono text-[11px] text-slate-400">{days}d</span>
+                                )
+                              })()}
+                            </td>
                             <td className="px-5 py-3 text-right">
                               <Button size="sm" variant="outline" onClick={() => openReview(submission)}>Review</Button>
                             </td>
@@ -715,6 +886,31 @@ export default function FacultyDashboard() {
             </ResponsiveContainer>
           </Card>
           <p className="text-xs text-slate-400 mt-2">Submissions grouped by review status.</p>
+
+          <h2 className="font-display text-lg font-semibold text-ink mb-3 mt-8">Vertical Breakdown</h2>
+          <Card className="p-5">
+            <p className="text-sm text-slate-400 mb-3">Submissions by STAR vertical.</p>
+            {verticalChartData.length > 0 ? (
+              <>
+                <div className="h-56">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={verticalChartData} layout="vertical" margin={{ left: 8, right: 8 }}>
+                      <CartesianGrid horizontal={false} stroke="var(--color-rule)" />
+                      <XAxis type="number" tick={{ fontSize: 11, fill: 'var(--color-slate-400)' }} axisLine={false} tickLine={false} />
+                      <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: 'var(--color-slate-500)' }} axisLine={false} tickLine={false} width={96} />
+                      <Tooltip cursor={{ fill: 'var(--color-paper)' }} contentStyle={{ borderRadius: 8, border: '1px solid var(--color-rule)', background: 'var(--color-card)' }} />
+                      <Bar dataKey="count" radius={[0, 3, 3, 0]} maxBarSize={18} fill="var(--color-brand-500)">
+                        {verticalChartData.map((entry) => <Cell key={entry.name} fill={entry.fill} />)}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+                <p className="text-xs text-slate-400 mt-2">{submissions.length} submissions across {verticalChartData.length} verticals.</p>
+              </>
+            ) : (
+              <EmptyState icon="▦" title="No vertical data" description="Submissions will be grouped by vertical as they arrive." />
+            )}
+          </Card>
 
           <h2 className="font-display text-lg font-semibold text-ink mb-3 mt-8">Top Students</h2>
           <Card className="p-5">
@@ -793,12 +989,34 @@ export default function FacultyDashboard() {
                       </div>
                     </td>
                     <td className="px-3 py-2.5 font-mono text-xs text-slate-500">{student.registerNumber || '—'}</td>
-                    <td className="px-3 py-2.5 text-slate-600">{student.attendancePercentage ?? '—'}{student.attendancePercentage != null ? '%' : ''}</td>
+                    <td className="px-3 py-2.5 text-slate-600">
+                    {student.attendancePercentage == null ? (
+                      '—'
+                    ) : student.attendancePercentage < 75 ? (
+                      <span className="inline-flex items-center gap-1.5 rounded-full bg-rose-50 px-2 py-0.5 font-mono text-[11px] font-medium text-rose-600">
+                        <span className="h-1.5 w-1.5 rounded-full bg-rose-500" />
+                        {student.attendancePercentage}%
+                      </span>
+                    ) : student.attendancePercentage < 85 ? (
+                      <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2 py-0.5 font-mono text-[11px] font-medium text-amber-700">
+                        <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+                        {student.attendancePercentage}%
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5 rounded-full bg-leaf-50 px-2 py-0.5 font-mono text-[11px] font-medium text-leaf-700">
+                        <span className="h-1.5 w-1.5 rounded-full bg-leaf-500" />
+                        {student.attendancePercentage}%
+                      </span>
+                    )}
+                  </td>
                     <td className="px-3 py-2.5 text-slate-600">{student.semesterPercentage ?? '—'}{student.semesterPercentage != null ? '%' : ''}</td>
                     <td className="px-3 py-2.5 text-slate-600">{student.libraryUsage ?? '—'}</td>
                     <td className="px-3 py-2.5 font-mono text-xs text-slate-600">{student.totalPoints || 0} pts</td>
                     <td className="px-3 py-2.5 text-right">
-                      <Button size="sm" variant="outline" onClick={() => openRecordEditor(student)}>Edit</Button>
+                      <div className="flex items-center justify-end gap-1.5">
+                        <Button size="sm" variant="outline" onClick={() => openRecordEditor(student)}>Edit</Button>
+                        <Button size="sm" variant="danger" onClick={() => setDeletingStudent(student)}>Delete</Button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -861,105 +1079,151 @@ export default function FacultyDashboard() {
               </div>
             )}
 
-            <div className="rounded-md border border-rule p-4 space-y-2">
-              <p className="text-sm font-semibold text-ink">{reviewing.activityId?.activityName || 'Activity'}</p>
-              <EvidenceRow label="Student" value={reviewing.studentId?.name} />
-              <EvidenceRow label="Register No." value={reviewing.studentId?.registerNumber || reviewing.studentId?.regNo} />
-              <EvidenceRow label="Vertical" value={reviewing.activityId?.vertical || reviewing.vertical} />
-              <EvidenceRow label="Activity type" value={reviewing.activityType || reviewing.visitType} />
-              <EvidenceRow label="Level" value={reviewing.selectedLevel} />
-              <EvidenceRow label="Duration" value={reviewing.durationWeeks} />
-              <EvidenceRow label="Project URL" value={reviewing.projectUrl || reviewing.proofUrl} />
-              {reviewing.description && (
-                <p className="text-xs text-slate-400 mt-1">{reviewing.description}</p>
-              )}
+            <div className="flex gap-1 rounded-md border border-rule bg-paper p-1" role="tablist" aria-label="Review sections">
+              {[
+                { key: 'evidence', label: 'Evidence' },
+                { key: 'ai', label: 'AI Review' },
+                { key: 'decision', label: 'Score & Decision' },
+              ].map((tab) => (
+                <button
+                  key={tab.key}
+                  type="button"
+                  role="tab"
+                  aria-selected={reviewTab === tab.key}
+                  onClick={() => setReviewTab(tab.key)}
+                  className={`flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors focus-ring ${
+                    reviewTab === tab.key ? 'bg-card text-ink shadow-sm' : 'text-slate-500 hover:text-ink'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
             </div>
 
-            {reviewing?.certificateFile?.fileName && (
-              <div className="rounded-md border border-rule bg-paper p-4 flex items-center justify-between">
-                <div className="min-w-0">
-                  <p className="text-sm font-medium text-ink">Stored evidence</p>
-                  <p className="text-xs text-slate-400 mt-0.5 truncate">{reviewing.certificateFile.fileName}</p>
+            {reviewTab === 'evidence' && (
+              <>
+                <div className="rounded-md border border-rule p-4 space-y-2">
+                  <p className="text-sm font-semibold text-ink">{reviewing.activityId?.activityName || 'Activity'}</p>
+                  <EvidenceRow label="Student" value={reviewing.studentId?.name} />
+                  <EvidenceRow label="Register No." value={reviewing.studentId?.registerNumber || reviewing.studentId?.regNo} />
+                  <EvidenceRow label="Vertical" value={reviewing.activityId?.vertical || reviewing.vertical} />
+                  <EvidenceRow label="Activity type" value={reviewing.activityType || reviewing.visitType} />
+                  <EvidenceRow label="Level" value={reviewing.selectedLevel} />
+                  <EvidenceRow label="Duration" value={reviewing.durationWeeks} />
+                  <EvidenceRow label="Project URL" value={reviewing.projectUrl || reviewing.proofUrl} />
+                  {reviewing.description && (
+                    <p className="text-xs text-slate-400 mt-1">{reviewing.description}</p>
+                  )}
                 </div>
-                <Button size="sm" variant="outline" onClick={() => openEvidence(reviewing._id)}>Open file</Button>
+
+                {reviewing?.certificateFile?.fileName && (
+                  <div className="rounded-md border border-rule bg-paper p-4 flex items-center justify-between">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-ink">Stored evidence</p>
+                      <p className="text-xs text-slate-400 mt-0.5 truncate">{reviewing.certificateFile.fileName}</p>
+                    </div>
+                    <Button size="sm" variant="outline" onClick={() => openEvidence(reviewing._id)}>Open file</Button>
+                  </div>
+                )}
+              </>
+            )}
+
+            {reviewTab === 'ai' && (
+              <div className="rounded-md border border-rule bg-paper p-4 space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <span className="flex h-6 w-6 items-center justify-center rounded-md border border-brand-200 bg-brand-50 font-mono text-[10px] font-medium text-brand-600">AI</span>
+                    <p className="text-sm font-semibold text-ink">Evidence Review</p>
+                    {reviewing?.aiReview?.provider && (
+                      <span className="rounded-full bg-brand-100 text-brand-600 px-2 py-0.5 font-mono text-[10px] font-medium uppercase tracking-[0.12em]">
+                        {reviewing.aiReview.provider}
+                      </span>
+                    )}
+                  </div>
+                  <Button size="sm" variant="outline" onClick={runAi} loading={aiLoading}>
+                    {reviewing?.aiReview ? 'Re-run' : 'Run AI review'}
+                  </Button>
+                </div>
+
+                {aiLoading ? (
+                  <p className="text-xs text-slate-400 animate-pulse">Analyzing evidence and submission details…</p>
+                ) : reviewing?.aiReview ? (
+                  <>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${AI_RECOMMENDATION_TONES[reviewing.aiReview.recommendation] || 'bg-slate-100 text-slate-600'}`}>
+                        <span className="h-1.5 w-1.5 rounded-full bg-current" />
+                        {reviewing.aiReview.recommendation}
+                      </span>
+                      <span className="text-xs text-slate-500">
+                        {reviewing.aiReview.suggestedPoints} SP suggested · {reviewing.aiReview.confidence}% confidence
+                      </span>
+                    </div>
+                    {reviewing.aiReview.reasoning && (
+                      <p className="text-sm text-slate-600 leading-relaxed">{reviewing.aiReview.reasoning}</p>
+                    )}
+                    {Array.isArray(reviewing.aiReview.flags) && reviewing.aiReview.flags.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {reviewing.aiReview.flags.map((flag, index) => (
+                          <span key={index} className="rounded-md bg-card border border-amber-200 text-amber-700 text-xs px-2 py-1">
+                            {flag}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      <Button size="sm" variant="outline" onClick={applyAi}>Use suggested score & reasoning</Button>
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-xs text-slate-400">
+                    No AI review yet. Run the AI evidence reviewer to get an approve/reject/review recommendation.
+                  </p>
+                )}
               </div>
             )}
 
-            <div className="rounded-md border border-rule bg-paper p-4 space-y-3">
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2">
-                  <span className="flex h-6 w-6 items-center justify-center rounded-md border border-brand-200 bg-brand-50 font-mono text-[10px] font-medium text-brand-600">AI</span>
-                  <p className="text-sm font-semibold text-ink">Evidence Review</p>
-                  {reviewing?.aiReview?.provider && (
-                    <span className="rounded-full bg-brand-100 text-brand-600 px-2 py-0.5 font-mono text-[10px] font-medium uppercase tracking-[0.12em]">
-                      {reviewing.aiReview.provider}
-                    </span>
-                  )}
+            {reviewTab === 'decision' && (
+              <>
+                <div className="rounded-md border border-rule bg-paper p-4 flex items-center justify-between">
+                  <p className="text-xs uppercase tracking-wide text-slate-400">{pointsStateLabel(reviewing)}</p>
+                  <p className="text-lg font-semibold text-ink">{pointsFor(reviewing)} SP</p>
                 </div>
-                <Button size="sm" variant="outline" onClick={runAi} loading={aiLoading}>
-                  {reviewing?.aiReview ? 'Re-run' : 'Run AI review'}
-                </Button>
-              </div>
 
-              {aiLoading ? (
-                <p className="text-xs text-slate-400 animate-pulse">Analyzing evidence and submission details…</p>
-              ) : reviewing?.aiReview ? (
-                <>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${AI_RECOMMENDATION_TONES[reviewing.aiReview.recommendation] || 'bg-slate-100 text-slate-600'}`}>
-                      <span className="h-1.5 w-1.5 rounded-full bg-current" />
-                      {reviewing.aiReview.recommendation}
-                    </span>
-                    <span className="text-xs text-slate-500">
-                      {reviewing.aiReview.suggestedPoints} SP suggested · {reviewing.aiReview.confidence}% confidence
-                    </span>
+                <Field label="Final marks">
+                  <Input
+                    type="number"
+                    value={score}
+                    onChange={(e) => setScore(e.target.value)}
+                    placeholder="0"
+                    autoFocus
+                  />
+                </Field>
+                <Field label="Remarks" hint="This feedback will be visible to the student. Press A to approve or R to reject.">
+                  <div className="mb-2 flex flex-wrap gap-1.5">
+                    {REMARK_TEMPLATES.map((template) => (
+                      <button
+                        key={template.label}
+                        type="button"
+                        onClick={() => setRemarks(template.text)}
+                        className="rounded-full border border-rule bg-card px-2.5 py-1 text-[11px] font-medium text-slate-500 transition-colors hover:border-brand-300 hover:text-brand-600 focus-ring"
+                      >
+                        {template.label}
+                      </button>
+                    ))}
                   </div>
-                  {reviewing.aiReview.reasoning && (
-                    <p className="text-sm text-slate-600 leading-relaxed">{reviewing.aiReview.reasoning}</p>
-                  )}
-                  {Array.isArray(reviewing.aiReview.flags) && reviewing.aiReview.flags.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5">
-                      {reviewing.aiReview.flags.map((flag, index) => (
-                        <span key={index} className="rounded-md bg-card border border-amber-200 text-amber-700 text-xs px-2 py-1">
-                          {flag}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                  <div className="flex flex-wrap gap-2 pt-1">
-                    <Button size="sm" variant="outline" onClick={applyAi}>Use suggested score & reasoning</Button>
-                  </div>
-                </>
-              ) : (
-                <p className="text-xs text-slate-400">
-                  No AI review yet. Run the AI evidence reviewer to get an approve/reject/review recommendation.
-                </p>
-              )}
-            </div>
+                  <Textarea
+                    value={remarks}
+                    onChange={(e) => setRemarks(e.target.value)}
+                    rows={3}
+                    maxLength={500}
+                    placeholder="Add feedback for the student..."
+                  />
+                  <p className="mt-1 text-right font-mono text-[11px] text-slate-400">{remarks.length} / 500</p>
+                </Field>
 
-            <div className="rounded-md border border-rule bg-paper p-4 flex items-center justify-between">
-              <p className="text-xs uppercase tracking-wide text-slate-400">{pointsStateLabel(reviewing)}</p>
-              <p className="text-lg font-semibold text-ink">{pointsFor(reviewing)} SP</p>
-            </div>
-
-            <Field label="Final marks">
-              <Input
-                type="number"
-                value={score}
-                onChange={(e) => setScore(e.target.value)}
-                placeholder="0"
-              />
-            </Field>
-            <Field label="Remarks" hint="This feedback will be visible to the student.">
-              <Textarea
-                value={remarks}
-                onChange={(e) => setRemarks(e.target.value)}
-                rows={3}
-                placeholder="Add feedback for the student..."
-              />
-            </Field>
-
-            <CommentThread submissionId={reviewing?._id} currentUser={currentUser} />
+                <CommentThread submissionId={reviewing?._id} currentUser={currentUser} />
+              </>
+            )}
           </div>
         )}
       </Modal>
@@ -982,6 +1246,17 @@ export default function FacultyDashboard() {
         onInputChange={setBulkRemarks}
         inputPlaceholder={bulkConfirm?.action === 'Rejected' ? 'Explain why submissions are being rejected…' : undefined}
       />
-    </Shell>
+
+      <ConfirmDialog
+        open={!!deletingStudent}
+        onClose={() => setDeletingStudent(null)}
+        title="Delete student"
+        message={`Delete ${deletingStudent?.name || 'this student'} (${deletingStudent?.registerNumber || ''}) from your assigned list? This also removes their submissions and points. This cannot be undone.`}
+        confirmLabel="Delete"
+        tone="danger"
+        onConfirm={handleDeleteStudent}
+        loading={deleteLoading}
+      />
+    </div>
   )
 }

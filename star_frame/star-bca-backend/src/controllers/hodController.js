@@ -54,8 +54,22 @@ const getFacultyApprovedSubmissions = async (req, res, next) => {
       .limit(limit);
 
     const total = await Submission.countDocuments(query);
+
+    let flaggedCount = 0;
+    if (!flagged) {
+      flaggedCount = await Submission.countDocuments({
+        status: 'FacultyApproved',
+        studentId: { $in: studentIds },
+        $or: [
+          { 'aiReview.recommendation': { $in: ['Reject', 'Review'] } },
+          { 'aiReview.confidence': { $lt: 70 } },
+          { aiReview: null },
+        ],
+      });
+    }
+
     return sendSuccess(res, 200, 'Faculty-approved submissions fetched', {
-      submissions: submissions.map(sanitizeSubmission), total, page, limit,
+      submissions: submissions.map(sanitizeSubmission), total, page, limit, flaggedCount,
     });
   } catch (error) {
     next(error);
@@ -318,6 +332,32 @@ const unlockSemester = async (req, res, next) => {
   }
 };
 
+const getSemesterStatus = async (req, res, next) => {
+  try {
+    const query = { role: 'student', departmentId: req.user.departmentId };
+    const students = await User.find(query).select('semesterLocked semesterBatch batch').lean();
+    const locked = students.filter((s) => s.semesterLocked).length;
+    const total = students.length;
+
+    const batches = {};
+    students.forEach((s) => {
+      const batch = s.semesterBatch || s.batch || 'all';
+      if (!batches[batch]) batches[batch] = { locked: 0, total: 0 };
+      batches[batch].total += 1;
+      if (s.semesterLocked) batches[batch].locked += 1;
+    });
+
+    return sendSuccess(res, 200, 'Semester status fetched', {
+      locked,
+      unlocked: total - locked,
+      total,
+      batches: Object.entries(batches).map(([name, value]) => ({ name, ...value })),
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 const runAiReview = async (req, res, next) => {
   try {
     const submission = await Submission.findById(req.params.id);
@@ -351,5 +391,6 @@ module.exports = {
   exportSubmissions,
   lockSemester,
   unlockSemester,
+  getSemesterStatus,
   runAiReview,
 };

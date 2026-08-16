@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { Button, Card, EmptyState, LoadingState, Toast } from '../components/UI.jsx'
-import { getStudentBookmarks } from '../utils/api.js'
+import { getStudentBookmarks, toggleStudentBookmark } from '../utils/api.js'
 
 /* Hallmark · genre: editorial · macrostructure: Workbench · design-system: design.md · designed-as-app */
 
@@ -10,16 +10,25 @@ function formatDate(dateStr) {
   return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
-function BookmarkCard({ activity }) {
+function BookmarkCard({ activity, onSubmitActivity, onRemove }) {
   const isPastDeadline = activity.deadline && new Date(activity.deadline) < new Date()
+  const activityId = activity._id || activity.activityId
 
   return (
     <Card className="flex flex-col p-5 transition-colors hover:border-slate-300">
       <div className="flex items-start justify-between gap-2">
         <h3 className="font-display text-base font-semibold leading-snug text-ink">
-          {activity.name || 'Untitled Activity'}
+          {activity.activityName || activity.name || 'Untitled Activity'}
         </h3>
-        <span className="shrink-0 text-amber-500" aria-label="Bookmarked">★</span>
+        <button
+          type="button"
+          onClick={() => onRemove(activityId)}
+          className="shrink-0 text-slate-300 transition-colors hover:text-rose-500 focus-ring"
+          aria-label="Remove bookmark"
+          title="Remove bookmark"
+        >
+          ★
+        </button>
       </div>
 
       {activity.vertical && (
@@ -30,7 +39,7 @@ function BookmarkCard({ activity }) {
 
       <div className="mt-auto pt-4 text-sm text-slate-500">
         <div className="flex items-center justify-between">
-          <span className="tabular font-mono text-xs text-slate-400">Max {activity.maxPoints ?? 0} pts</span>
+          <span className="tabular font-mono text-xs text-slate-400">Max {activity.maximumPoints ?? activity.maxPoints ?? 0} pts</span>
           {activity.deadline && (
             <span className={`font-mono text-xs ${isPastDeadline ? 'text-rose-500' : 'text-slate-400'}`}>
               Due {formatDate(activity.deadline)}
@@ -38,11 +47,30 @@ function BookmarkCard({ activity }) {
           )}
         </div>
       </div>
+
+      <div className="mt-3">
+        <Button
+          size="sm"
+          className="w-full"
+          disabled={isPastDeadline}
+          onClick={() => onSubmitActivity({
+            id: activityId,
+            name: activity.activityName || activity.name || 'Activity',
+            description: activity.description || 'Upload supporting evidence',
+            maxPoints: activity.maximumPoints ?? activity.maxPoints ?? 0,
+            deadline: activity.deadline || '',
+            category: 'cert',
+            vertical: activity.vertical || '',
+          })}
+        >
+          {isPastDeadline ? 'Deadline passed' : 'Submit from bookmark'}
+        </Button>
+      </div>
     </Card>
   )
 }
 
-export default function StudentBookmarksPage() {
+export default function StudentBookmarksPage({ onSubmitActivity }) {
   const [bookmarks, setBookmarks] = useState([])
   const [loading, setLoading] = useState(true)
   const [toast, setToast] = useState('')
@@ -61,16 +89,28 @@ export default function StudentBookmarksPage() {
     load()
   }, [])
 
+  async function handleRemove(activityId) {
+    if (!activityId) return
+    try {
+      await toggleStudentBookmark(activityId)
+      setBookmarks((prev) => prev.filter((activity) => (activity._id || activity.activityId) !== activityId))
+      setToast('Bookmark removed.')
+      window.setTimeout(() => setToast(''), 2600)
+    } catch (error) {
+      setToast(error.message || 'Unable to remove bookmark')
+    }
+  }
+
   if (loading) return <LoadingState rows={4} />
 
   return (
     <div className="space-y-6">
-      {toast && <Toast message={toast} tone="error" onDismiss={() => setToast('')} />}
+      {toast && <Toast message={toast} tone={toast.toLowerCase().includes('unable') ? 'error' : 'success'} onDismiss={() => setToast('')} />}
 
       <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
           <h1 className="font-display text-2xl font-semibold leading-tight tracking-tight text-ink md:text-3xl">Bookmarked Activities</h1>
-          <p className="mt-1.5 text-sm text-slate-500">Activities you&apos;ve saved for later.</p>
+          <p className="mt-1.5 text-sm text-slate-500">Activities you&apos;ve saved for later — submit from here directly.</p>
         </div>
         <Button variant="outline" onClick={() => window.location.reload()}>Refresh</Button>
       </div>
@@ -78,7 +118,12 @@ export default function StudentBookmarksPage() {
       {bookmarks.length > 0 ? (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
           {bookmarks.map((activity) => (
-            <BookmarkCard key={activity._id || activity.activityId || activity.name} activity={activity} />
+            <BookmarkCard
+              key={activity._id || activity.activityId || activity.activityName}
+              activity={activity}
+              onSubmitActivity={onSubmitActivity}
+              onRemove={handleRemove}
+            />
           ))}
         </div>
       ) : (

@@ -34,9 +34,16 @@ describe('Toast', () => {
 })
 
 describe('StatusBadge', () => {
-  it.each(['Pending', 'Approved', 'Rejected', 'FacultyApproved', 'HODRejected'])('renders %s without crashing', (status) => {
+  const cases = [
+    ['Pending', 'Under Review'],
+    ['Approved', 'Approved'],
+    ['Rejected', 'Rejected'],
+    ['FacultyApproved', 'Pending HOD Review'],
+    ['HODRejected', 'Rejected by HOD'],
+  ]
+  it.each(cases)('renders %s as %s', (status, label) => {
     render(<StatusBadge status={status} />)
-    expect(screen.getByText(status)).toBeInTheDocument()
+    expect(screen.getByText(label)).toBeInTheDocument()
   })
 })
 

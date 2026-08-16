@@ -87,6 +87,14 @@ export async function updateStudentProfile(profileData) {
   return request('/api/student/profile', { method: 'PUT', body: profileData })
 }
 
+export async function getTeacherProfile() {
+  return request('/api/teacher/profile')
+}
+
+export async function updateTeacherProfile(profileData) {
+  return request('/api/teacher/profile', { method: 'PUT', body: profileData })
+}
+
 export async function getStudentActivities(page = 1, limit = 10) {
   return request(`/api/student/activities?page=${page}&limit=${limit}`)
 }
@@ -97,6 +105,44 @@ export async function getStudentSubmissions(limit = 20) {
 
 export async function getStudentPoints() {
   return request('/api/student/points')
+}
+
+export async function resubmitStudentEvidence(submissionId, formData, onProgress) {
+  const token = localStorage.getItem('stars_token')
+
+  if (typeof onProgress === 'function') {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      xhr.open('PUT', `${API_BASE_URL}/api/student/submission/${submissionId}/resubmit`)
+      if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          onProgress(Math.round((event.loaded / event.total) * 100))
+        }
+      }
+      xhr.onload = () => {
+        if (xhr.status === 401) {
+          handleUnauthorized()
+          reject(new Error('Session expired'))
+          return
+        }
+        try {
+          const data = JSON.parse(xhr.responseText)
+          if (xhr.status >= 200 && xhr.status < 300 && data?.success !== false) {
+            resolve(data)
+          } else {
+            reject(new Error(data?.message || 'Resubmission failed'))
+          }
+        } catch {
+          reject(new Error('Resubmission failed'))
+        }
+      }
+      xhr.onerror = () => reject(new Error('Network error during resubmission'))
+      xhr.send(formData)
+    })
+  }
+
+  return request(`/api/student/submission/${submissionId}/resubmit`, { method: 'PUT', body: formData, auth: true, isFormData: true })
 }
 
 export async function appealSubmission(id, reason) {
@@ -179,6 +225,10 @@ export async function getTeacherStudents(search = '') {
 
 export async function updateTeacherStudentRecords(id, payload) {
   return request(`/api/teacher/student/${id}/records`, { method: 'PUT', body: payload })
+}
+
+export async function deleteTeacherStudent(id) {
+  return request(`/api/teacher/student/${id}`, { method: 'DELETE' })
 }
 
 export async function bulkUpdateTeacherStudentRecords(formData) {
@@ -295,6 +345,22 @@ export async function getLookups() {
   return request('/api/admin/lookups')
 }
 
+export async function getSchools() {
+  return request('/api/admin/schools')
+}
+
+export async function createSchool(payload) {
+  return request('/api/admin/schools', { method: 'POST', body: payload })
+}
+
+export async function updateSchool(id, payload) {
+  return request(`/api/admin/schools/${id}`, { method: 'PUT', body: payload })
+}
+
+export async function deleteSchool(id) {
+  return request(`/api/admin/schools/${id}`, { method: 'DELETE' })
+}
+
 export async function getAnalytics() {
   return request('/api/admin/analytics')
 }
@@ -349,6 +415,14 @@ export async function getAuditLogs(page = 1, limit = 20, action = '') {
   return request(`/api/admin/audit-logs?${query.toString()}`)
 }
 
+export async function deleteAuditLog(id) {
+  return request(`/api/admin/audit-logs/${id}`, { method: 'DELETE' })
+}
+
+export async function clearAuditLogs() {
+  return request('/api/admin/audit-logs', { method: 'DELETE' })
+}
+
 export async function getAcademicSettings() {
   return request('/api/admin/academic-year')
 }
@@ -396,6 +470,10 @@ export async function lockSemester(batch) {
 
 export async function unlockSemester(batch) {
   return request('/api/hod/semester/unlock', { method: 'PUT', body: { batch: batch || undefined } })
+}
+
+export async function getHodSemesterStatus() {
+  return request('/api/hod/semester/status')
 }
 
 // ---------------------------------------------------------------------------

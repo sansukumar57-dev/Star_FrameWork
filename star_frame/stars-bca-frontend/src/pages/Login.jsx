@@ -27,6 +27,52 @@ const ROLES = [
   { id: 'admin', label: 'Admin' },
 ]
 
+const ADMIN_PORTALS = [
+  {
+    id: 'hod',
+    label: 'HOD',
+    description: 'Head of Department — verify submissions, manage semester locks',
+    icon: (
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
+        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+        <circle cx="9" cy="7" r="4" />
+        <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+        <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+      </svg>
+    ),
+    path: '/hod',
+    color: 'text-violet-600 bg-violet-50 border-violet-200',
+    active: 'ring-2 ring-violet-500 border-violet-400 bg-violet-50',
+  },
+  {
+    id: 'dean',
+    label: 'Dean',
+    description: 'Dean of Academics — department analytics and AI summaries',
+    icon: (
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
+        <rect x="2" y="3" width="20" height="14" rx="2" />
+        <path d="M8 21h8M12 17v4" />
+      </svg>
+    ),
+    path: '/principal',
+    color: 'text-sky-600 bg-sky-50 border-sky-200',
+    active: 'ring-2 ring-sky-500 border-sky-400 bg-sky-50',
+  },
+  {
+    id: 'admin',
+    label: 'Admin',
+    description: 'System Administrator — user management, activities, audit logs',
+    icon: (
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
+        <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+      </svg>
+    ),
+    path: '/principal',
+    color: 'text-amber-600 bg-amber-50 border-amber-200',
+    active: 'ring-2 ring-amber-500 border-amber-400 bg-amber-50',
+  },
+]
+
 export default function Login() {
   const [role, setRole] = useState('student')
   const [showPassword, setShowPassword] = useState(false)
@@ -35,6 +81,8 @@ export default function Login() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [showForgot, setShowForgot] = useState(false)
+  const [showAdminPicker, setShowAdminPicker] = useState(false)
+  const [selectedPortal, setSelectedPortal] = useState('hod')
   const navigate = useNavigate()
 
   async function handleSubmit(e) {
@@ -57,12 +105,12 @@ export default function Login() {
       localStorage.setItem('stars_user', JSON.stringify(authData.user || {}))
       const userRole = authData.user?.role
       const accountType = authData.user?.accountType
-      const destination =
-        userRole === 'student' ? '/student'
-        : userRole === 'faculty' ? '/faculty'
-        : userRole === 'admin' && accountType === 'hod' ? '/hod'
-        : '/principal'
-      navigate(destination)
+      if (userRole === 'student') return navigate('/student')
+      if (userRole === 'faculty') return navigate('/faculty')
+      // Admin: show portal picker
+      const defaultPortal = accountType === 'hod' ? 'hod' : accountType === 'dean' ? 'dean' : 'admin'
+      setSelectedPortal(defaultPortal)
+      setShowAdminPicker(true)
     } catch (err) {
       const message = err?.message || 'Login failed'
       setError(message.includes('Invalid') || message.includes('credentials') ? 'Invalid credentials. Please check your username and password.' : message)
@@ -181,6 +229,61 @@ export default function Login() {
           </form>
         </div>
       </div>
+
+      {/* Admin portal picker */}
+      <Modal
+        open={showAdminPicker}
+        onClose={() => {}}
+        title="Select your portal"
+        footer={
+          <div className="flex gap-3 justify-end">
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setShowAdminPicker(false)
+                setLoading(false)
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                const portal = ADMIN_PORTALS.find((p) => p.id === selectedPortal)
+                localStorage.setItem('stars_portal', portal.id)
+                setShowAdminPicker(false)
+                navigate(portal.path)
+              }}
+            >
+              Continue
+            </Button>
+          </div>
+        }
+      >
+        <p className="text-sm text-slate-500 mb-5">You have admin access. Choose which portal you want to open.</p>
+        <div className="space-y-3">
+          {ADMIN_PORTALS.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              onClick={() => setSelectedPortal(p.id)}
+              className={`w-full flex items-start gap-4 rounded-lg border p-4 text-left transition-all ${
+                selectedPortal === p.id ? p.active : 'border-rule bg-card hover:border-slate-300'
+              }`}
+            >
+              <span className={`mt-0.5 rounded-md p-2 border ${p.color}`}>{p.icon}</span>
+              <div>
+                <p className="font-semibold text-ink text-sm">{p.label}</p>
+                <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">{p.description}</p>
+              </div>
+              {selectedPortal === p.id && (
+                <svg className="ml-auto mt-1 shrink-0 text-brand-600" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              )}
+            </button>
+          ))}
+        </div>
+      </Modal>
 
       <Modal
         open={showForgot}

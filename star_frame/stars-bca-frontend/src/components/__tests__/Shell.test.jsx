@@ -24,13 +24,13 @@ describe('Shell', () => {
 
   it('renders nav links for the role', () => {
     renderShell()
-    expect(screen.getByText('Dashboard')).toBeInTheDocument()
-    expect(screen.getByText('Review Submissions')).toBeInTheDocument()
+    expect(screen.getAllByText('Dashboard').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Review Submissions').length).toBeGreaterThan(0)
   })
 
   it('shows a badge count when badges are provided', () => {
     renderShell({ badges: { '/faculty/reviews': 3 } })
-    expect(screen.getByText('3')).toBeInTheDocument()
+    expect(screen.getAllByText('3').length).toBeGreaterThan(0)
   })
 
   it('does not show a badge when count is zero', () => {

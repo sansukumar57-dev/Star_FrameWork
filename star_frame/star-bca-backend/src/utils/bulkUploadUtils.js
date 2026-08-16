@@ -16,6 +16,17 @@ const getValue = (row, candidates = []) => {
       return value;
     }
   }
+
+  for (const candidate of candidates) {
+    const matchingKey = Object.keys(row || {}).find((key) => key.includes(candidate) || candidate.includes(key));
+    if (matchingKey !== undefined) {
+      const value = row[matchingKey];
+      if (value !== undefined && value !== null && String(value).trim() !== '') {
+        return value;
+      }
+    }
+  }
+
   return '';
 };
 

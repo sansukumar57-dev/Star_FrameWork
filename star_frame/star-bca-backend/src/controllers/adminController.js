@@ -13,6 +13,8 @@ const { sendSuccess, sendError } = require('../utils/response');
 const { logAudit } = require('../utils/audit');
 const { generateDepartmentSummary } = require('../services/departmentInsightsService');
 
+const escapeRegExp = (value) => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 const buildUserResponse = (user) => {
   const safeUser = user.toObject ? user.toObject() : { ...user };
   delete safeUser.password;
@@ -538,23 +540,82 @@ const createBulkUsers = async (req, res, next) => {
     const normalizedRows = rows.map((row) => normalizeBulkRow(row)).filter((row) => !isEmptyRow(row));
     if (!normalizedRows.length) return sendError(res, 400, 'No student rows were found in the uploaded file');
 
-    const selectedSchoolId = req.body?.schoolId || req.body?.selectedSchoolId || req.body?.school || '';
-    const selectedDepartmentId = req.body?.departmentId || req.body?.selectedDepartmentId || req.body?.department || '';
-    const selectedFacultyId = req.body?.facultyId || req.body?.selectedFacultyId || req.body?.faculty || '';
+    const selectedSchoolName = String(req.body?.schoolName || req.body?.selectedSchoolName || req.body?.school || '').trim();
+    const selectedDepartmentName = String(req.body?.departmentName || req.body?.selectedDepartmentName || req.body?.department || '').trim();
+    const selectedFacultyName = String(req.body?.facultyName || req.body?.selectedFacultyName || req.body?.faculty || '').trim();
 
-    if (!selectedSchoolId || !selectedDepartmentId || !selectedFacultyId) {
-      return sendError(res, 400, 'Please select a school, department, and faculty before uploading');
+    const selectedSchoolId = req.body?.schoolId || req.body?.selectedSchoolId || '';
+    const selectedDepartmentId = req.body?.departmentId || req.body?.selectedDepartmentId || '';
+    const selectedFacultyId = req.body?.facultyId || req.body?.selectedFacultyId || '';
+
+    if ((!selectedSchoolId && !selectedSchoolName) || (!selectedDepartmentId && !selectedDepartmentName) || (!selectedFacultyId && !selectedFacultyName)) {
+      return sendError(res, 400, 'Please provide a school, department, and faculty (pick or type a name) before uploading');
     }
 
+    const resolveSchool = async () => {
+      if (selectedSchoolId) {
+        const found = await School.findById(selectedSchoolId).lean().catch(() => null);
+        if (found) return found;
+      }
+      if (selectedSchoolName) {
+        const found = await School.findOne({ name: { $regex: `^${escapeRegExp(selectedSchoolName)}$`, $options: 'i' } }).lean().catch(() => null);
+        if (found) return found;
+        if (req.user?.accountType !== 'hod') {
+          return School.create({ name: selectedSchoolName, status: 'Active' });
+        }
+      }
+      return null;
+    };
+
+    const resolveDepartment = async (schoolId) => {
+      if (selectedDepartmentId) {
+        const found = await Department.findOne({ _id: selectedDepartmentId, schoolId }).lean().catch(() => null);
+        if (found) return found;
+      }
+      if (selectedDepartmentName) {
+        const found = await Department.findOne({ schoolId, name: { $regex: `^${escapeRegExp(selectedDepartmentName)}$`, $options: 'i' } }).lean().catch(() => null);
+        if (found) return found;
+        if (req.user?.accountType !== 'hod') {
+          return Department.create({ name: selectedDepartmentName, schoolId, status: 'Active' });
+        }
+      }
+      return null;
+    };
+
+    const resolveFaculty = async () => {
+      if (selectedFacultyId) {
+        const found = await User.findOne({ _id: selectedFacultyId, role: 'faculty' }).lean().catch(() => null);
+        if (found) return found;
+      }
+      if (selectedFacultyName) {
+        const found = await User.findOne({
+          role: 'faculty',
+          $or: [
+            { name: { $regex: `^${escapeRegExp(selectedFacultyName)}$`, $options: 'i' } },
+            { email: selectedFacultyName.toLowerCase() },
+          ],
+        }).lean().catch(() => null);
+        if (found) return found;
+      }
+      return null;
+    };
+
+    const selectedSchool = await resolveSchool();
+    if (!selectedSchool) return sendError(res, 400, `School "${selectedSchoolName || selectedSchoolId}" was not found`);
+    const resolvedDepartment = await resolveDepartment(selectedSchool._id);
+    if (!resolvedDepartment) return sendError(res, 400, `Department "${selectedDepartmentName || selectedDepartmentId}" was not found in ${selectedSchool.name}`);
+    const resolvedFaculty = await resolveFaculty();
+    if (!resolvedFaculty) return sendError(res, 400, `Faculty "${selectedFacultyName || selectedFacultyId}" was not found. Create the faculty account first or pick an existing one.`);
+
     if (req.user?.accountType === 'hod') {
-      if (req.user.schoolId && selectedSchoolId.toString() !== req.user.schoolId.toString()) {
+      if (req.user.schoolId && selectedSchool._id.toString() !== req.user.schoolId.toString()) {
         return sendError(res, 403, 'HOD accounts can only upload for their own school');
       }
-      if (req.user.departmentId && selectedDepartmentId.toString() !== req.user.departmentId.toString()) {
+      if (req.user.departmentId && resolvedDepartment._id.toString() !== req.user.departmentId.toString()) {
         return sendError(res, 403, 'HOD accounts can only upload for their own department');
       }
       const facultyInScope = await User.findOne({
-        _id: selectedFacultyId,
+        _id: resolvedFaculty._id,
         role: 'faculty',
         departmentId: req.user.departmentId,
       }).lean();
@@ -562,12 +623,6 @@ const createBulkUsers = async (req, res, next) => {
         return sendError(res, 403, 'Please choose a faculty from your department');
       }
     }
-
-    const [selectedSchool, selectedDepartment, selectedFaculty] = await Promise.all([
-      School.findById(selectedSchoolId).select('name').lean().catch(() => null),
-      Department.findById(selectedDepartmentId).select('name').lean().catch(() => null),
-      User.findById(selectedFacultyId).select('name').lean().catch(() => null),
-    ]);
 
     const summary = {
       totalRows: normalizedRows.length,
@@ -622,19 +677,19 @@ const createBulkUsers = async (req, res, next) => {
         registerNumber: String(registerKey || '').trim(),
         regNo: String(registerKey || '').trim(),
         school: selectedSchool?.name || '',
-        department: selectedDepartment?.name || '',
-        schoolId: selectedSchoolId || null,
-        departmentId: selectedDepartmentId || null,
-        assignedTeacher: selectedFacultyId || null,
-        assignedFacultyId: selectedFacultyId || null,
+        department: resolvedDepartment?.name || '',
+        schoolId: selectedSchool?._id || null,
+        departmentId: resolvedDepartment?._id || null,
+        assignedTeacher: resolvedFaculty?._id || null,
+        assignedFacultyId: resolvedFaculty?._id || null,
         assignedYear: String(getValue(row, ['assigned year', 'assignedyear', 'year']) || '').trim(),
         year: String(getValue(row, ['year', 'year level', 'stud year']) || '').trim(),
         batch: String(getValue(row, ['batch', 'section batch']) || '').trim(),
         section: String(getValue(row, ['section']) || '').trim(),
         semesterBatch: String(getValue(row, ['semester batch', 'semesterbatch']) || '').trim(),
         recommendedSchool: selectedSchool?.name || '',
-        recommendedDepartment: selectedDepartment?.name || '',
-        recommendedFaculty: selectedFaculty?.name || '',
+        recommendedDepartment: resolvedDepartment?.name || '',
+        recommendedFaculty: resolvedFaculty?.name || '',
       };
 
       try {
@@ -964,6 +1019,43 @@ const getAuditLogs = async (req, res, next) => {
   }
 };
 
+const deleteAuditLog = async (req, res, next) => {
+  try {
+    if (req.user?.accountType === 'hod') {
+      return sendError(res, 403, 'HOD accounts cannot delete audit logs');
+    }
+    const log = await AuditLog.findByIdAndDelete(req.params.id);
+    if (!log) return sendError(res, 404, 'Audit log not found');
+
+    await logAudit(req, {
+      action: 'Audit log deleted',
+      entityType: 'AuditLog',
+      entityId: log._id,
+      details: { action: log.action, actor: log.actorName || log.actorId?.toString() || 'System' },
+    });
+    return sendSuccess(res, 200, 'Audit log deleted', log);
+  } catch (error) {
+    next(error);
+  }
+};
+
+const clearAuditLogs = async (req, res, next) => {
+  try {
+    if (req.user?.accountType === 'hod') {
+      return sendError(res, 403, 'HOD accounts cannot clear audit logs');
+    }
+    const result = await AuditLog.deleteMany({});
+    await logAudit(req, {
+      action: 'Audit logs cleared',
+      entityType: 'AuditLog',
+      details: { deleted: result.deletedCount },
+    });
+    return sendSuccess(res, 200, `Deleted ${result.deletedCount} audit log${result.deletedCount === 1 ? '' : 's'}`, { deleted: result.deletedCount });
+  } catch (error) {
+    next(error);
+  }
+};
+
 const getAcademicSettings = async (req, res, next) => {
   try {
     const [academicYear, semesterOpen] = await Promise.all([
@@ -1143,6 +1235,100 @@ const getDepartmentAiSummary = async (req, res, next) => {
   }
 };
 
+const listSchools = async (req, res, next) => {
+  try {
+    const schools = await School.find({}).sort({ name: 1 }).lean();
+    return sendSuccess(res, 200, 'Schools fetched', schools);
+  } catch (error) {
+    next(error);
+  }
+};
+
+const createSchool = async (req, res, next) => {
+  try {
+    const name = `${req.body?.name || ''}`.trim();
+    const code = `${req.body?.code || ''}`.trim().toUpperCase();
+    const description = `${req.body?.description || ''}`.trim();
+    const status = req.body?.status || 'Active';
+
+    if (!name) return sendError(res, 400, 'School name is required');
+
+    const existing = await School.findOne({ name: new RegExp(`^${escapeRegExp(name)}$`, 'i') });
+    if (existing) return sendError(res, 400, 'A school with that name already exists');
+
+    const school = await School.create({ name, code, description, status });
+    await logAudit(req, {
+      action: 'School created',
+      entityType: 'School',
+      entityId: school._id,
+      details: { name: school.name, code: school.code },
+    });
+    return sendSuccess(res, 201, 'School created successfully', school);
+  } catch (error) {
+    next(error);
+  }
+};
+
+const updateSchool = async (req, res, next) => {
+  try {
+    const school = await School.findById(req.params.id);
+    if (!school) return sendError(res, 404, 'School not found');
+
+    if (req.body?.name !== undefined) {
+      const name = `${req.body.name}`.trim();
+      if (!name) return sendError(res, 400, 'School name is required');
+      const existing = await School.findOne({ _id: { $ne: school._id }, name: new RegExp(`^${escapeRegExp(name)}$`, 'i') });
+      if (existing) return sendError(res, 400, 'A school with that name already exists');
+      school.name = name;
+    }
+    if (req.body?.code !== undefined) school.code = `${req.body.code}`.trim().toUpperCase();
+    if (req.body?.description !== undefined) school.description = `${req.body.description}`.trim();
+    if (req.body?.status !== undefined) school.status = req.body.status;
+
+    await school.save();
+    await logAudit(req, {
+      action: 'School updated',
+      entityType: 'School',
+      entityId: school._id,
+      details: { name: school.name, code: school.code },
+    });
+    return sendSuccess(res, 200, 'School updated successfully', school);
+  } catch (error) {
+    next(error);
+  }
+};
+
+const deleteSchool = async (req, res, next) => {
+  try {
+    const school = await School.findById(req.params.id);
+    if (!school) return sendError(res, 404, 'School not found');
+
+    const [departmentCount, userCount] = await Promise.all([
+      Department.countDocuments({ schoolId: school._id }),
+      User.countDocuments({ schoolId: school._id }),
+    ]);
+
+    if (departmentCount > 0 || userCount > 0) {
+      return sendError(
+        res,
+        400,
+        `Cannot delete this school because ${departmentCount} department(s) and ${userCount} user(s) are linked to it. Set it to Inactive instead.`
+      );
+    }
+
+    await School.findByIdAndDelete(school._id);
+    await logAudit(req, {
+      action: 'School deleted',
+      entityType: 'School',
+      entityId: school._id,
+      details: { name: school.name },
+    });
+    return sendSuccess(res, 200, 'School deleted successfully', school);
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getUsers,
   exportUsers,
@@ -1163,10 +1349,16 @@ module.exports = {
   exportAnalytics,
   downloadBulkTemplate,
   getAuditLogs,
+  deleteAuditLog,
+  clearAuditLogs,
   getAcademicSettings,
   updateAcademicSettings,
   rolloverAcademicYear,
   exportAdminReport,
   getDepartmentStats,
   getDepartmentAiSummary,
+  listSchools,
+  createSchool,
+  updateSchool,
+  deleteSchool,
 };

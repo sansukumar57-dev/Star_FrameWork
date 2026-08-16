@@ -1,3 +1,4 @@
+const { body, validationResult } = require('express-validator');
 const Submission = require('../models/Submission');
 const User = require('../models/User');
 const Activity = require('../models/Activity');
@@ -346,6 +347,47 @@ const getDashboardStats = async (req, res, next) => {
   }
 };
 
+const getFacultyProfile = async (req, res, next) => {
+  try {
+    const faculty = await User.findOne({ _id: req.user.id, role: 'faculty' }).select('-password');
+    if (!faculty) {
+      return sendError(res, 404, 'Faculty profile not found');
+    }
+
+    return sendSuccess(res, 200, 'Faculty profile fetched successfully', faculty);
+  } catch (error) {
+    next(error);
+  }
+};
+
+const updateFacultyProfile = async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return sendError(res, 400, errors.array()[0].msg);
+
+    const { name, phoneNumber, dob } = req.body;
+    const updateData = {};
+
+    if (typeof name !== 'undefined') updateData.name = name;
+    if (typeof phoneNumber !== 'undefined') updateData.phoneNumber = phoneNumber;
+    if (typeof dob !== 'undefined') updateData.dob = dob;
+
+    const updatedFaculty = await User.findOneAndUpdate(
+      { _id: req.user.id, role: 'faculty' },
+      updateData,
+      { new: true }
+    ).select('-password');
+
+    if (!updatedFaculty) {
+      return sendError(res, 404, 'Faculty profile not found');
+    }
+
+    return sendSuccess(res, 200, 'Faculty profile updated successfully', updatedFaculty);
+  } catch (error) {
+    next(error);
+  }
+};
+
 const getFacultyStudents = async (req, res, next) => {
   try {
     const search = (req.query.search || '').trim();
@@ -428,6 +470,27 @@ const updateStudentRecords = async (req, res, next) => {
       semesterPercentage: student.semesterPercentage,
       libraryUsage: student.libraryUsage,
     });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const deleteAssignedStudent = async (req, res, next) => {
+  try {
+    const student = await User.findOne({ _id: req.params.id, role: 'student', assignedFacultyId: req.user.id });
+    if (!student) return sendError(res, 404, 'Student not found in your assigned list');
+
+    await Submission.deleteMany({ studentId: student._id });
+    await student.deleteOne();
+
+    await logAudit(req, {
+      action: 'Student deleted by faculty',
+      entityType: 'Student',
+      entityId: student._id,
+      details: { name: student.name, registerNumber: student.registerNumber || student.regNo || '' },
+    });
+
+    return sendSuccess(res, 200, 'Student deleted successfully', { id: req.params.id });
   } catch (error) {
     next(error);
   }
@@ -724,4 +787,12 @@ const autoApproveAiCleared = async (req, res, next) => {
   }
 };
 
-module.exports = { getPendingSubmissions, exportSubmissions, getSubmissionDetails, approveSubmission, rejectSubmission, bulkApproveSubmissions, bulkRejectSubmissions, getDashboardStats, getFacultyStudents, updateStudentRecords, bulkUpdateStudentRecords, runAiReview, applyAiReview, exportTeacherReport, getAiClearedCount, autoApproveAiCleared };
+const teacherValidators = {
+  updateProfile: [
+    body('name').optional().isString().withMessage('Name must be a string'),
+    body('phoneNumber').optional().isString().withMessage('Phone number must be a string'),
+    body('dob').optional().isString().withMessage('Date of birth must be a string'),
+  ],
+};
+
+module.exports = { getPendingSubmissions, exportSubmissions, getSubmissionDetails, approveSubmission, rejectSubmission, bulkApproveSubmissions, bulkRejectSubmissions, getDashboardStats, getFacultyProfile, updateFacultyProfile, getFacultyStudents, updateStudentRecords, bulkUpdateStudentRecords, deleteAssignedStudent, runAiReview, applyAiReview, exportTeacherReport, getAiClearedCount, autoApproveAiCleared, teacherValidators };

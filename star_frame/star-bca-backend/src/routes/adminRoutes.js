@@ -3,7 +3,7 @@ const authMiddleware = require('../middleware/authMiddleware');
 const allowRoles = require('../middleware/roleMiddleware');
 const deanScopedMiddleware = require('../middleware/deanScopedMiddleware');
 const upload = require('../middleware/uploadMiddleware');
-const { getUsers, exportUsers, getUserById, createDepartment, createUser, updateUser, deleteUser, resetPassword, getAnalytics, getLookups, createBulkUsers, bulkAssignFaculty, listActivities, createActivity, updateActivity, deleteActivity, exportAnalytics, downloadBulkTemplate, getAuditLogs, getAcademicSettings, updateAcademicSettings, rolloverAcademicYear, exportAdminReport, getDepartmentStats, getDepartmentAiSummary } = require('../controllers/adminController');
+const { getUsers, exportUsers, getUserById, createDepartment, createUser, updateUser, deleteUser, resetPassword, getAnalytics, getLookups, createBulkUsers, bulkAssignFaculty, listActivities, createActivity, updateActivity, deleteActivity, exportAnalytics, downloadBulkTemplate, getAuditLogs, deleteAuditLog, clearAuditLogs, getAcademicSettings, updateAcademicSettings, rolloverAcademicYear, exportAdminReport, getDepartmentStats, getDepartmentAiSummary, listSchools, createSchool, updateSchool, deleteSchool } = require('../controllers/adminController');
 
 const router = express.Router();
 
@@ -13,8 +13,14 @@ router.use(deanScopedMiddleware);
 router.get('/analytics', getAnalytics);
 router.get('/analytics/export', exportAnalytics);
 router.get('/lookups', getLookups);
+router.get('/schools', listSchools);
+router.post('/schools', createSchool);
+router.put('/schools/:id', updateSchool);
+router.delete('/schools/:id', deleteSchool);
 router.get('/bulk-upload/template', downloadBulkTemplate);
 router.get('/audit-logs', getAuditLogs);
+router.delete('/audit-logs/:id', deleteAuditLog);
+router.delete('/audit-logs', clearAuditLogs);
 router.get('/academic-year', getAcademicSettings);
 router.put('/academic-year', updateAcademicSettings);
 router.post('/academic-year/rollover', rolloverAcademicYear);

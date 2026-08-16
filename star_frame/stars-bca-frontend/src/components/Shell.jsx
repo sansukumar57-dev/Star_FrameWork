@@ -42,7 +42,7 @@ export const NAV = {
     { to: '/hod', label: 'Dashboard', icon: '\u2302' },
     { to: '/hod/verify', label: 'Verify Submissions', icon: '\u2713' },
     { to: '/hod/semester', label: 'Semester Lock', icon: '\u26BF' },
-    { to: '/principal', label: 'User Management', icon: '\u2699' },
+    { to: '/hod/users', label: 'User Management', icon: '\u2699' },
   ],
 }
 
@@ -53,11 +53,31 @@ export default function Shell({ role, userName, department, children, profileTri
   const location = useLocation()
   const links = navLinks || NAV[role] || []
   const [menuOpen, setMenuOpen] = useState(false)
+  const [showTop, setShowTop] = useState(false)
   const { theme, toggleTheme } = useTheme()
+
+  const storedDepartment = React.useMemo(() => {
+    try {
+      const user = JSON.parse(localStorage.getItem('stars_user') || '{}')
+      return user?.department || user?.departmentName || user?.school || ''
+    } catch {
+      return ''
+    }
+  }, [])
+  const displayDepartment = department || storedDepartment
 
   useEffect(() => {
     setMenuOpen(false)
   }, [location.pathname])
+
+  useEffect(() => {
+    function onScroll() {
+      setShowTop(window.scrollY > 320)
+    }
+    window.addEventListener('scroll', onScroll, { passive: true })
+    onScroll()
+    return () => window.removeEventListener('scroll', onScroll)
+  }, [])
 
   useEffect(() => {
     if (!menuOpen) return
@@ -146,9 +166,9 @@ export default function Shell({ role, userName, department, children, profileTri
           </div>
 
           <div className="hidden items-center gap-4 md:flex">
-            {department && (
+            {displayDepartment && (
               <span className="hidden border border-rule px-3 py-1 font-mono text-[11px] uppercase tracking-[0.12em] text-slate-500 sm:inline-flex">
-                {department}
+                {displayDepartment}
               </span>
             )}
             {profileTrigger ? (
@@ -197,15 +217,72 @@ export default function Shell({ role, userName, department, children, profileTri
         </nav>
       </header>
 
-      <main className="flex-1 animate-fade-in px-4 py-6 sm:px-6 lg:px-10 lg:py-8">{children}</main>
+      <main className="flex-1 animate-fade-in px-4 py-6 pb-24 sm:px-6 lg:px-10 lg:py-8 md:pb-6">{children}</main>
 
       {/* Colophon */}
-      <footer className="border-t border-rule px-4 py-5 sm:px-6 lg:px-10">
+      <footer className="border-b border-rule px-4 py-5 sm:px-6 lg:px-10 md:border-b-0">
         <div className="flex flex-col gap-1 md:flex-row md:items-center md:justify-between">
           <p className="font-display text-[11px] uppercase tracking-[0.18em] text-slate-400">STARS-BCA · STAR Framework Management System</p>
           <p className="font-display text-[11px] uppercase tracking-[0.18em] text-slate-400">KPR College of Arts and Science, Coimbatore</p>
         </div>
       </footer>
+
+      {/* Back to top */}
+      {showTop && (
+        <button
+          type="button"
+          onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+          className="fixed bottom-20 right-4 z-40 flex h-10 w-10 items-center justify-center rounded-full border border-rule bg-card text-slate-500 shadow-soft transition-colors hover:text-ink focus-ring md:bottom-6 md:right-6"
+          aria-label="Back to top"
+        >
+          &#8593;
+        </button>
+      )}
+
+      {/* Mobile bottom tab bar */}
+      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-rule bg-paper/95 backdrop-blur md:hidden" aria-label="Primary">
+        <div className="flex">
+          {links.slice(0, 4).map((link) => {
+            const count = badges[link.to]
+            return (
+              <NavLink
+                key={link.to}
+                to={link.to}
+                end
+                className={({ isActive }) =>
+                  `relative flex flex-1 flex-col items-center gap-0.5 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2.5 text-[10px] font-medium transition-colors ${
+                    isActive ? 'text-brand-600' : 'text-slate-400 hover:text-ink'
+                  }`
+                }
+              >
+                {({ isActive }) => (
+                  <>
+                    <span className="relative text-base leading-none">
+                      {link.icon}
+                      {count > 0 && (
+                        <span className="absolute -right-2 -top-1 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-brand-500 px-0.5 font-mono text-[8px] font-medium text-paper">
+                          {count > 99 ? '99+' : count}
+                        </span>
+                      )}
+                    </span>
+                    <span className="truncate px-1">{link.label}</span>
+                    {isActive && <span className="absolute inset-x-3 top-0 h-0.5 rounded-full bg-brand-500" />}
+                  </>
+                )}
+              </NavLink>
+            )
+          })}
+          <button
+            type="button"
+            onClick={() => setMenuOpen(true)}
+            className="flex flex-1 flex-col items-center gap-0.5 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2.5 text-[10px] font-medium text-slate-400 transition-colors hover:text-ink"
+            aria-label="More menu"
+          >
+            <span className="text-base leading-none">&#8942;</span>
+            <span className="truncate px-1">More</span>
+          </button>
+        </div>
+      </nav>
 
       {/* Mobile drawer */}
       {menuOpen && (

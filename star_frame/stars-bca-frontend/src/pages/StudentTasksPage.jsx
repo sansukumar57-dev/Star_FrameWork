@@ -1,8 +1,28 @@
 import React, { useState, useMemo, useEffect } from 'react'
-import { Button, CategoryTag, Card, Select, EmptyState } from '../components/UI.jsx'
+import { Button, CategoryTag, Card, Input, EmptyState } from '../components/UI.jsx'
 import { getStudentBookmarks, toggleStudentBookmark } from '../utils/api.js'
 
 /* Hallmark · genre: editorial · macrostructure: Workbench · design-system: design.md · designed-as-app */
+
+const DAY_MS = 86400000
+
+function deadlineTone(task) {
+  if (!task.deadline) return 'text-slate-400'
+  const daysLeft = (new Date(task.deadline) - Date.now()) / DAY_MS
+  if (daysLeft < 0) return 'font-medium text-rose-600'
+  if (daysLeft < 3) return 'font-medium text-rose-500'
+  if (daysLeft < 7) return 'font-medium text-amber-600'
+  return 'text-slate-400'
+}
+
+function deadlineLabel(task) {
+  if (!task.deadline) return null
+  const daysLeft = Math.floor((new Date(task.deadline) - Date.now()) / DAY_MS)
+  const due = `Due ${new Date(task.deadline).toLocaleDateString()}`
+  if (daysLeft < 0) return `${due} (${Math.abs(daysLeft)}d overdue)`
+  if (daysLeft < 3) return `${due} (${daysLeft}d left)`
+  return due
+}
 
 export default function StudentTasksPage({
   selectedVertical,
@@ -18,6 +38,7 @@ export default function StudentTasksPage({
   categoryById,
 }) {
   const [search, setSearch] = useState('')
+  const [showBookmarked, setShowBookmarked] = useState(false)
   const [bookmarkedIds, setBookmarkedIds] = useState(new Set())
 
   useEffect(() => {
@@ -50,13 +71,27 @@ export default function StudentTasksPage({
   }
 
   const filteredGroups = useMemo(() => {
-    if (!search.trim()) return groupedTasks
-    const q = search.toLowerCase()
-    return groupedTasks.map((group) => ({
-      ...group,
-      items: group.items.filter((task) => String(task.name).toLowerCase().includes(q) || String(task.description).toLowerCase().includes(q)),
-    })).filter((group) => group.items.length > 0)
-  }, [groupedTasks, search])
+    let groups = groupedTasks
+    if (showBookmarked) {
+      groups = groups.map((group) => ({
+        ...group,
+        items: group.items.filter((task) => bookmarkedIds.has(String(task.id))),
+      })).filter((group) => group.items.length > 0)
+    }
+    if (search.trim()) {
+      const q = search.toLowerCase()
+      groups = groups.map((group) => ({
+        ...group,
+        items: group.items.filter((task) => String(task.name).toLowerCase().includes(q) || String(task.description).toLowerCase().includes(q)),
+      })).filter((group) => group.items.length > 0)
+    }
+    return groups
+  }, [groupedTasks, search, showBookmarked, bookmarkedIds])
+
+  const bookmarkedCount = useMemo(
+    () => groupedTasks.reduce((sum, group) => sum + group.items.filter((task) => bookmarkedIds.has(String(task.id))).length, 0),
+    [groupedTasks, bookmarkedIds]
+  )
 
   return (
     <div className="space-y-8">
@@ -65,25 +100,50 @@ export default function StudentTasksPage({
           <h1 className="font-display text-2xl font-semibold leading-tight tracking-tight text-ink md:text-3xl">STAR Tasks</h1>
           <p className="mt-1.5 text-sm text-slate-500">Select a vertical and submit supporting evidence for the next activity.</p>
         </div>
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-          <div className="w-full max-w-xs">
-            <label className="mb-1.5 block font-display text-[11px] uppercase tracking-[0.18em] text-slate-400">Vertical</label>
-            <Select value={selectedVertical} onChange={(e) => setSelectedVertical(e.target.value)}>
-              {verticalOptions.map((option) => (
-                <option key={option} value={option}>{option}</option>
-              ))}
-            </Select>
-          </div>
+        <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-end md:w-auto">
           <div className="w-full max-w-xs">
             <label className="mb-1.5 block font-display text-[11px] uppercase tracking-[0.18em] text-slate-400">Search</label>
-            <input
-              type="text"
+            <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search activities..."
-              className="w-full rounded-md border border-rule bg-card px-3.5 py-2.5 text-sm text-ink placeholder:text-slate-400 focus-ring focus:border-brand-400"
             />
           </div>
+          <Button
+            variant={showBookmarked ? 'primary' : 'outline'}
+            size="md"
+            onClick={() => setShowBookmarked((prev) => !prev)}
+            className="sm:mb-0"
+          >
+            ★ Bookmarked{bookmarkedCount > 0 ? ` (${bookmarkedCount})` : ''}
+          </Button>
+        </div>
+      </div>
+
+      {/* Vertical pill selector */}
+      <div>
+        <label className="mb-2 block font-display text-[11px] uppercase tracking-[0.18em] text-slate-400">Vertical</label>
+        <div className="-mx-1 flex gap-2 overflow-x-auto pb-2" role="tablist" aria-label="Vertical selector">
+          {verticalOptions.map((option) => {
+            const short = String(option).replace(/Vertical\s*\d+\s*-\s*/, '')
+            const active = option === selectedVertical
+            return (
+              <button
+                key={option}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => setSelectedVertical(option)}
+                className={`shrink-0 whitespace-nowrap rounded-full border px-3.5 py-1.5 font-mono text-xs font-medium transition-colors focus-ring ${
+                  active
+                    ? 'border-brand-500 bg-brand-500 text-white'
+                    : 'border-rule bg-card text-slate-500 hover:border-brand-300 hover:text-ink'
+                }`}
+              >
+                {short}
+              </button>
+            )
+          })}
         </div>
       </div>
 
@@ -97,8 +157,10 @@ export default function StudentTasksPage({
         </div>
 
         <div className="px-6 py-2">
-          {search.trim() && filteredGroups.length === 0 && (
-            <p className="py-4 text-center text-sm text-slate-400">No activities match &quot;{search}&quot;</p>
+          {(search.trim() || showBookmarked) && filteredGroups.length === 0 && (
+            <p className="py-4 text-center text-sm text-slate-400">
+              {showBookmarked && !search.trim() ? 'No bookmarked tasks in this vertical yet.' : `No activities match "${search}"`}
+            </p>
           )}
           {filteredGroups.map((group) => (
             <section key={group.key}>
@@ -111,8 +173,8 @@ export default function StudentTasksPage({
                       <div className="flex flex-wrap items-center gap-2">
                         <CategoryTag category={cat} />
                         {task.deadline && (
-                          <span className={`font-mono text-xs ${task.important ? 'font-medium text-amber-600' : 'text-slate-400'}`}>
-                            {task.important && <span className="mr-1 uppercase tracking-[0.1em]">Important</span>}Due {new Date(task.deadline).toLocaleDateString()}
+                          <span className={`font-mono text-xs ${deadlineTone(task)}`}>
+                            {task.important && <span className="mr-1 uppercase tracking-[0.1em]">Important</span>}{deadlineLabel(task)}
                           </span>
                         )}
                       </div>
@@ -124,7 +186,7 @@ export default function StudentTasksPage({
                       <button
                         type="button"
                         onClick={() => handleToggleBookmark(task.id)}
-                        className="rounded-full p-1.5 text-slate-400 transition-colors hover:text-amber-500 focus-ring"
+                        className={`rounded-full p-1.5 transition-colors focus-ring ${bookmarkedIds.has(String(task.id)) ? 'text-amber-500' : 'text-slate-400 hover:text-amber-500'}`}
                         aria-label={bookmarkedIds.has(String(task.id)) ? 'Remove bookmark' : 'Bookmark activity'}
                       >
                         {bookmarkedIds.has(String(task.id)) ? '★' : '☆'}

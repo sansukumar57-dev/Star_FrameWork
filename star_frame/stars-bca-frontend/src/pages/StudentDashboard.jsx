@@ -3,7 +3,7 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import Shell from '../components/Shell.jsx'
 import { Modal, Button, Toast, LoadingState, EmptyState, Field, Input, Select } from '../components/UI.jsx'
 import { TASKS, categoryById } from '../data/mockData.js'
-import { getStudentActivities, getStudentProfile, getStudentPoints, getStudentSubmissions, submitStudentEvidence, getSubmissionFileBlob, getStudentNotifications, getStudentDeadlineAlerts } from '../utils/api.js'
+import { getStudentActivities, getStudentProfile, getStudentPoints, getStudentSubmissions, submitStudentEvidence, resubmitStudentEvidence, getSubmissionFileBlob, getStudentNotifications, getStudentDeadlineAlerts } from '../utils/api.js'
 import { getTaskProfile, getSubmissionRules, normalizeTaskName } from '../utils/taskProfiles.js'
 import useSubmissionStatusToasts from '../hooks/useSubmissionStatusToasts.js'
 import StudentDashboardHome from './StudentDashboardHome.jsx'
@@ -27,6 +27,9 @@ export default function StudentDashboard() {
   const [selectedVertical, setSelectedVertical] = useState('Vertical 1 - Academic Performance')
   const [activeTask, setActiveTask] = useState(null)
   const [fileName, setFileName] = useState('')
+  const [selectedFile, setSelectedFile] = useState(null)
+  const [dragActive, setDragActive] = useState(false)
+  const [resubmitting, setResubmitting] = useState(null)
   const [activityOption, setActivityOption] = useState('Internship')
   const [visitOption, setVisitOption] = useState('Industrial Visit')
   const [durationWeeks, setDurationWeeks] = useState('2 weeks')
@@ -37,6 +40,7 @@ export default function StudentDashboard() {
   const [selectedLevel, setSelectedLevel] = useState('')
   const [urlInput, setUrlInput] = useState('')
   const [uploadProgress, setUploadProgress] = useState(0)
+  const [submissionSuccess, setSubmissionSuccess] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
   const [alerts, setAlerts] = useState([])
   const [dismissedAlerts, setDismissedAlerts] = useState(() => {
@@ -197,6 +201,8 @@ export default function StudentDashboard() {
     const profile = getTaskProfile(task)
     setActiveTask(task)
     setFileName('')
+    setSelectedFile(null)
+    setResubmitting(null)
     setDurationWeeks('2 weeks')
     setActivityOption(profile.defaultOption || 'Internship')
     setVisitOption(profile.defaultOption || 'Industrial Visit')
@@ -204,9 +210,99 @@ export default function StudentDashboard() {
     setUrlInput('')
   }
 
+  function openResubmit(submission) {
+    const task = {
+      id: submission.activityId?._id || submission.activityId,
+      name: submission.activityId?.activityName || submission.activityName || 'Activity',
+      description: submission.description || 'Upload supporting evidence',
+      maxPoints: submission.activityId?.maximumPoints || 0,
+      deadline: '',
+      category: 'cert',
+      vertical: submission.activityId?.vertical || submission.vertical || '',
+    }
+    const profile = getTaskProfile(task)
+    setResubmitting(submission)
+    setActiveTask(task)
+    setFileName('')
+    setSelectedFile(null)
+    setDurationWeeks('2 weeks')
+    setActivityOption(profile.defaultOption || 'Internship')
+    setVisitOption(profile.defaultOption || 'Industrial Visit')
+    setSelectedLevel(submission.selectedLevel || '')
+    setUrlInput(submission.projectUrl || submission.proofUrl || '')
+  }
+
   function getSubmissionRulesForTask() {
     return getSubmissionRules(activeTask, { activityOption, visitOption, selectedLevel, urlInput, fileName })
   }
+
+  function handleFileChosen(event) {
+    const file = event.target.files?.[0] || null
+    if (file) {
+      const typeOk = ALLOWED_FILE_TYPES.some((prefix) => file.type.startsWith(prefix))
+      if (!typeOk) {
+        setToast('Please upload an image, PDF, Word document, or video.')
+        event.target.value = ''
+        return
+      }
+      if (file.size > MAX_FILE_SIZE) {
+        setToast('File is too large — the maximum size is 100 MB.')
+        event.target.value = ''
+        return
+      }
+      setSelectedFile(file)
+      setFileName(file.name)
+    }
+  }
+
+  function handleDrop(event) {
+    event.preventDefault()
+    setDragActive(false)
+    const file = event.dataTransfer?.files?.[0] || null
+    if (!file) return
+    const typeOk = ALLOWED_FILE_TYPES.some((prefix) => file.type.startsWith(prefix))
+    if (!typeOk) {
+      setToast('Please upload an image, PDF, Word document, or video.')
+      return
+    }
+    if (file.size > MAX_FILE_SIZE) {
+      setToast('File is too large — the maximum size is 100 MB.')
+      return
+    }
+    setSelectedFile(file)
+    setFileName(file.name)
+  }
+
+  const scorePreview = useMemo(() => {
+    if (!activeTask) return null
+    const maxPoints = Number(activeTask.maxPoints || 0)
+
+    // level-select tasks map each option to a point tier
+    if (getTaskProfile(activeTask).group === 'level-select') {
+      const options = getTaskProfile(activeTask).options
+      const base = maxPoints > 0 ? Math.max(1, Math.floor(maxPoints / Math.max(options.length, 1))) : 0
+      const range = options.map((_, index) => base * (index + 1))
+      return {
+        range: range.length ? [range[0], range[range.length - 1]] : [maxPoints, maxPoints],
+        note: 'Estimated from the level/achievement tiers for this activity.',
+      }
+    }
+    if (getTaskProfile(activeTask).group === 'activity-1') {
+      const internshipScale = { 'Internship': [20, 60], 'Case Study': [20, 60], 'Mini Project': [20, 60] }
+      const [lo, hi] = internshipScale[activityOption] || [20, 60]
+      return {
+        range: [Math.min(lo, maxPoints || hi), Math.min(hi, maxPoints || hi)],
+        note: `Estimated for ${activityOption} based on typical STAR level tiers.`,
+      }
+    }
+    if (getTaskProfile(activeTask).group === 'activity-2') {
+      return { range: [20, Math.min(60, maxPoints || 60)], note: 'Estimated for a visit with evidence.' }
+    }
+    if (getTaskProfile(activeTask).group === 'url') {
+      return { range: [25, Math.min(75, maxPoints || 75)], note: 'Estimated for a published project/portfolio.' }
+    }
+    return { range: [maxPoints, maxPoints], note: 'Points are awarded at the activity maximum.' }
+  }, [activeTask, activityOption])
 
   const ALLOWED_FILE_TYPES = ['image/', 'application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml', 'video/']
   const MAX_FILE_SIZE = 100 * 1024 * 1024
@@ -215,23 +311,23 @@ export default function StudentDashboard() {
     if (!activeTask) return
 
     const rules = getSubmissionRulesForTask()
-    const selectedFile = document.querySelector('input[type="file"]')?.files?.[0]
+    const file = selectedFile || document.querySelector('input[type="file"]')?.files?.[0] || null
 
     if (rules.requiresLevel && !selectedLevel) {
       setToast('Please select a level before submitting.')
       return
     }
-    if (rules.requiresFile && !selectedFile) {
+    if (rules.requiresFile && !file) {
       setToast('Please upload the required file before submitting.')
       return
     }
-    if (rules.requiresFile && selectedFile) {
-      const typeOk = ALLOWED_FILE_TYPES.some((prefix) => selectedFile.type.startsWith(prefix))
+    if (rules.requiresFile && file) {
+      const typeOk = ALLOWED_FILE_TYPES.some((prefix) => file.type.startsWith(prefix))
       if (!typeOk) {
         setToast('Please upload an image, PDF, Word document, or video.')
         return
       }
-      if (selectedFile.size > MAX_FILE_SIZE) {
+      if (file.size > MAX_FILE_SIZE) {
         setToast('File is too large — the maximum size is 100 MB.')
         return
       }
@@ -266,18 +362,31 @@ export default function StudentDashboard() {
     formData.append('projectUrl', rules.requiresUrl ? urlInput : '')
     formData.append('proofUrl', rules.requiresUrl ? urlInput : '')
 
-    if (selectedFile) formData.append('certificateFile', selectedFile)
+    if (file) formData.append('certificateFile', file)
 
     try {
       setUploadProgress(0)
-      const response = await submitStudentEvidence(formData, (progress) => setUploadProgress(progress))
-      setSubmissions((prev) => [response.data, ...prev])
+      if (resubmitting?._id) {
+        const response = await resubmitStudentEvidence(resubmitting._id, formData, (progress) => setUploadProgress(progress))
+        setSubmissions((prev) => prev.map((s) => (s._id === response.data._id ? response.data : s)))
+        setToast('Evidence resubmitted — your faculty will review it shortly.')
+      } else {
+        const response = await submitStudentEvidence(formData, (progress) => setUploadProgress(progress))
+        setSubmissions((prev) => [response.data, ...prev])
+        setToast('Evidence submitted — your faculty will review it shortly.')
+      }
       setActiveTask(null)
+      setResubmitting(null)
       setSelectedLevel('')
       setUrlInput('')
+      setSelectedFile(null)
+      setFileName('')
       setUploadProgress(0)
-      setToast('Evidence submitted — your faculty will review it shortly.')
-      setTimeout(() => setToast(''), 3500)
+      setSubmissionSuccess(true)
+      window.setTimeout(() => {
+        setSubmissionSuccess(false)
+        setToast('')
+      }, 2200)
     } catch (error) {
       setUploadProgress(0)
       setToast(error.message || 'Submission failed')
@@ -317,6 +426,19 @@ export default function StudentDashboard() {
 
   return (
     <Shell role="student" userName={student.name} department={student.department} profileTrigger={() => setProfileOpen(true)} badges={{ '/student/notifications': unreadCount }}>
+      {submissionSuccess && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-ink/40 px-6" role="status" aria-live="polite">
+          <div className="rounded-xl border border-rule bg-card p-10 text-center shadow-modal animate-[fadeInDown_0.25s_ease-out]">
+            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-leaf-100 text-leaf-600">
+              <svg viewBox="0 0 24 24" fill="none" className="h-8 w-8" aria-hidden="true">
+                <path d="M5 12.5l4.5 4.5L19 7.5" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="animate-[drawCheck_0.4s_ease-out_forwards]" style={{ strokeDasharray: 30, strokeDashoffset: 30 }} />
+              </svg>
+            </div>
+            <p className="mt-4 font-display text-lg font-semibold text-ink">Evidence submitted!</p>
+            <p className="mt-1 text-sm text-slate-500">Your faculty will review it shortly.</p>
+          </div>
+        </div>
+      )}
       {toast && <Toast message={toast} tone={toast.toLowerCase().includes('fail') || toast.toLowerCase().includes('unable') || toast.toLowerCase().includes('please') ? 'error' : 'success'} onDismiss={() => setToast('')} />}
 
       {visibleAlerts.length > 0 && (
@@ -368,11 +490,11 @@ export default function StudentDashboard() {
       <Routes>
         <Route path="" element={<StudentDashboardHome student={student} points={points} completed={completed} pendingTasks={pendingTasks} pendingReview={pendingReview} submissions={submissions} recent={recent} activities={activities} />} />
         <Route path="tasks" element={<StudentTasksPage selectedVertical={selectedVertical} setSelectedVertical={setSelectedVertical} verticalOptions={verticalOptions} groupedTasks={groupedTasks} pendingTasks={pendingTasks} activityMeta={activityMeta} activityPage={activityPage} totalActivityPages={totalActivityPages} setActivityPage={setActivityPage} openUpload={openUpload} categoryById={categoryById} />} />
-        <Route path="submissions" element={<StudentSubmissionsPage submissions={submissions} openUpload={openUpload} openEvidence={openEvidence} />} />
+        <Route path="submissions" element={<StudentSubmissionsPage submissions={submissions} openUpload={openUpload} openResubmit={openResubmit} openEvidence={openEvidence} />} />
         <Route path="leaderboard" element={<StudentLeaderboardPage />} />
         <Route path="notifications" element={<StudentNotificationsPage onUnreadChange={setUnreadCount} />} />
         <Route path="points-ledger" element={<StudentPointsLedgerPage />} />
-        <Route path="bookmarks" element={<StudentBookmarksPage />} />
+        <Route path="bookmarks" element={<StudentBookmarksPage onSubmitActivity={openUpload} />} />
         <Route path="*" element={<Navigate to="/student" replace />} />
       </Routes>
 
@@ -389,21 +511,21 @@ export default function StudentDashboard() {
 
       <Modal
         open={!!activeTask}
-        onClose={() => setActiveTask(null)}
-        title={`Upload evidence — ${activeTask?.name || ''}`}
+        onClose={() => { setActiveTask(null); setResubmitting(null) }}
+        title={`${resubmitting ? 'Resubmit evidence' : 'Upload evidence'} — ${activeTask?.name || ''}`}
         footer={
           <>
-            <Button variant="ghost" onClick={() => setActiveTask(null)} disabled={uploadProgress > 0 && uploadProgress < 100}>Cancel</Button>
-            {uploadProgress > 0 && uploadProgress < 100 ? (
-              <div className="flex w-40 items-center gap-2">
-                <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-200">
-                  <div className="h-full rounded-full transition-all" style={{ width: `${uploadProgress}%`, backgroundColor: 'var(--color-brand-500)' }} />
+<Button variant="ghost" onClick={() => { setActiveTask(null); setResubmitting(null) }} disabled={uploadProgress > 0 && uploadProgress < 100}>Cancel</Button>
+              {uploadProgress > 0 && uploadProgress < 100 ? (
+                <div className="flex w-40 items-center gap-2">
+                  <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-200">
+                    <div className="h-full rounded-full transition-all" style={{ width: `${uploadProgress}%`, backgroundColor: 'var(--color-brand-500)' }} />
+                  </div>
+                  <span className="font-mono text-xs text-slate-500">{uploadProgress}%</span>
                 </div>
-                <span className="font-mono text-xs text-slate-500">{uploadProgress}%</span>
-              </div>
-            ) : (
-              <Button onClick={submitEvidence} disabled={!getSubmissionRulesForTask().canSubmit}>Submit</Button>
-            )}
+              ) : (
+                <Button onClick={submitEvidence} disabled={!getSubmissionRulesForTask().canSubmit}>{resubmitting ? 'Resubmit' : 'Submit'}</Button>
+              )}
           </>
         }
       >
@@ -451,11 +573,46 @@ export default function StudentDashboard() {
           activityOption === 'Case Study' || activityOption === 'Internship' ||
           getTaskProfile(activeTask).group === 'level-select') && (
           <div className="mb-4">
-            <label className="block cursor-pointer rounded-md border border-dashed border-rule bg-paper p-6 text-center transition-colors hover:border-brand-300">
-              <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.mp4,.webm,.mov" className="hidden" onChange={(e) => setFileName(e.target.files?.[0]?.name || '')} />
-              <span className="mx-auto flex h-8 w-8 items-center justify-center rounded-md border border-rule bg-card font-mono text-sm text-slate-400">&#x2191;</span>
-              <p className="mt-2 text-sm text-slate-500">{fileName ? <span className="font-medium text-ink">{fileName}</span> : 'Click to choose a file (PDF, JPG, PNG, DOC, MP4, WEBM, MOV) — max 100 MB'}</p>
+            <label
+              className={`block cursor-pointer rounded-md border border-dashed bg-paper p-6 text-center transition-colors ${
+                dragActive ? 'border-brand-500 bg-brand-50' : 'border-rule hover:border-brand-300'
+              }`}
+              onDragOver={(e) => { e.preventDefault(); setDragActive(true) }}
+              onDragLeave={() => setDragActive(false)}
+              onDrop={handleDrop}
+            >
+              <input
+                type="file"
+                accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.mp4,.webm,.mov"
+                className="hidden"
+                onChange={(e) => { handleFileChosen(e); setFileName(e.target.files?.[0]?.name || '') }}
+              />
+              <span className={`mx-auto flex h-8 w-8 items-center justify-center rounded-md border font-mono text-sm ${dragActive ? 'border-brand-300 bg-brand-50 text-brand-500' : 'border-rule bg-card text-slate-400'}`}>&#x2191;</span>
+              <p className="mt-2 text-sm text-slate-500">
+                {fileName ? (
+                  <span className="font-medium text-ink">{fileName}</span>
+                ) : dragActive ? (
+                  'Drop the file here to attach it'
+                ) : (
+                  'Drag & drop a file here, or click to browse (PDF, JPG, PNG, DOC, MP4, WEBM, MOV) — max 100 MB'
+                )}
+              </p>
             </label>
+          </div>
+        )}
+
+        {scorePreview && (
+          <div className="mb-4 rounded-md border border-brand-200 bg-brand-50/60 p-4">
+            <div className="flex items-start gap-3">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-brand-500 font-mono text-[10px] font-medium text-white">AI</span>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-ink">Estimated score preview</p>
+                <p className="mt-0.5 font-mono text-sm text-brand-700">
+                  {scorePreview.range[0]}–{scorePreview.range[1]} pts
+                </p>
+                <p className="mt-0.5 text-xs text-slate-500">{scorePreview.note}</p>
+              </div>
+            </div>
           </div>
         )}
 

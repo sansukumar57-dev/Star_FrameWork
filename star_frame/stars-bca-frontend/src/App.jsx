@@ -44,7 +44,7 @@ export default function App() {
         <Route path="/" element={<Login />} />
         <Route path="/student/*" element={<StudentDashboard />} />
         <Route path="/faculty/*" element={<FacultyDashboard />} />
-        <Route path="/principal" element={<PrincipalDashboard />} />
+        <Route path="/principal/*" element={<PrincipalDashboard />} />
         <Route path="/hod/*" element={<HODDashboard />} />
         <Route path="/principal/edit-student/:id" element={<EditStudent />} />
         <Route path="/principal/bulk-upload" element={<BulkStudentUpload />} />

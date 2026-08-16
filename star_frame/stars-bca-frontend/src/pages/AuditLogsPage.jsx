@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import Shell from '../components/Shell.jsx'
-import { Card, Input, EmptyState, LoadingState, Toast, Button } from '../components/UI.jsx'
-import { getAuditLogs } from '../utils/api.js'
+import { Card, Input, EmptyState, LoadingState, Toast, Button, ConfirmDialog } from '../components/UI.jsx'
+import { getAuditLogs, deleteAuditLog, clearAuditLogs } from '../utils/api.js'
 
 /* Hallmark · genre: editorial · macrostructure: Workbench · design-system: design.md · designed-as-app */
 
@@ -15,11 +15,18 @@ export default function AuditLogsPage() {
   const [query, setQuery] = useState('')
   const [loading, setLoading] = useState(true)
   const [toast, setToast] = useState(null)
+  const [confirm, setConfirm] = useState(null)
+  const [deleting, setDeleting] = useState(false)
+  const requestId = React.useRef(0)
 
   const notify = useCallback((message, tone = 'error') => {
     setToast({ message, tone })
     window.setTimeout(() => setToast(null), 3200)
   }, [])
+
+  useEffect(() => {
+    setPage(1)
+  }, [query])
 
   useEffect(() => {
     const timeout = setTimeout(() => {
@@ -30,15 +37,49 @@ export default function AuditLogsPage() {
   }, [page, query])
 
   async function load() {
+    const currentRequestId = ++requestId.current
     try {
       setLoading(true)
       const res = await getAuditLogs(page, 25, query)
+      if (currentRequestId !== requestId.current) return
       setLogs(res.data?.logs || [])
       setTotal(res.data?.total || 0)
     } catch (error) {
+      if (currentRequestId !== requestId.current) return
       notify(error.message || 'Unable to load audit logs')
     } finally {
-      setLoading(false)
+      if (currentRequestId === requestId.current) setLoading(false)
+    }
+  }
+
+  async function handleDelete(logId) {
+    setDeleting(true)
+    try {
+      await deleteAuditLog(logId)
+      notify('Audit log removed.', 'success')
+      if (logs.length === 1 && page > 1) setPage((prev) => prev - 1)
+      else await load()
+    } catch (error) {
+      notify(error.message || 'Unable to delete audit log')
+    } finally {
+      setDeleting(false)
+      setConfirm(null)
+    }
+  }
+
+  async function handleClearAll() {
+    setDeleting(true)
+    try {
+      const res = await clearAuditLogs()
+      notify(res.message || 'Audit logs cleared.', 'success')
+      setLogs([])
+      setTotal(0)
+      setPage(1)
+    } catch (error) {
+      notify(error.message || 'Unable to clear audit logs')
+    } finally {
+      setDeleting(false)
+      setConfirm(null)
     }
   }
 
@@ -51,7 +92,24 @@ export default function AuditLogsPage() {
           <h1 className="font-display text-2xl font-semibold leading-tight tracking-tight text-ink md:text-3xl">Audit Logs</h1>
           <p className="mt-1.5 text-sm text-slate-500">A record of user, department, activity, and review actions across the system.</p>
         </div>
-        <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter by action…" className="!w-full md:!w-64 !bg-card !border-rule" />
+        <div className="flex flex-wrap items-center gap-2">
+          <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter by action…" className="!w-full md:!w-64 !bg-card !border-rule" />
+          <Button
+            variant="danger"
+            disabled={total === 0 || deleting}
+            onClick={() =>
+              setConfirm({
+                id: 'all',
+                title: 'Clear all audit logs',
+                message: `Delete all ${total} audit log${total === 1 ? '' : 's'}? This action cannot be undone.`,
+                confirmLabel: 'Clear all',
+                onConfirm: handleClearAll,
+              })
+            }
+          >
+            Clear all
+          </Button>
+        </div>
       </div>
 
       {toast && <Toast message={toast.message} tone={toast.tone} onDismiss={() => setToast(null)} />}
@@ -70,6 +128,7 @@ export default function AuditLogsPage() {
                     <th className="px-5 py-3 text-left font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-slate-400">Entity</th>
                     <th className="px-5 py-3 text-left font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-slate-400">Details</th>
                     <th className="px-5 py-3 text-right font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-slate-400">When</th>
+                    <th className="px-5 py-3 text-right font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-slate-400">Remove</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -79,7 +138,7 @@ export default function AuditLogsPage() {
                         <span className="rounded-full border border-rule px-2.5 py-0.5 font-mono text-[11px] text-slate-600">{log.action}</span>
                       </td>
                       <td className="px-5 py-3.5">
-                        <p className="font-medium text-ink">{log.actorId?.name || 'System'}</p>
+                        <p className="font-medium text-ink">{log.actorId?.name || log.actorName || 'System'}</p>
                         <p className="text-xs text-slate-400">{log.actorId?.email || ''}</p>
                       </td>
                       <td className="px-5 py-3.5 font-mono text-xs text-slate-500">{log.entityType || '—'}</td>
@@ -87,6 +146,24 @@ export default function AuditLogsPage() {
                         {log.details ? <span className="block truncate font-mono text-xs">{JSON.stringify(log.details)}</span> : '—'}
                       </td>
                       <td className="px-5 py-3.5 text-right font-mono text-xs text-slate-400">{new Date(log.createdAt).toLocaleString()}</td>
+                      <td className="px-5 py-3.5 text-right">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={deleting}
+                          onClick={() =>
+                            setConfirm({
+                              id: log._id,
+                              title: 'Remove audit log',
+                              message: `Remove this audit log (${log.action})? This action cannot be undone.`,
+                              confirmLabel: 'Remove',
+                              onConfirm: () => handleDelete(log._id),
+                            })
+                          }
+                        >
+                          Remove
+                        </Button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -107,6 +184,18 @@ export default function AuditLogsPage() {
           </div>
         )}
       </Card>
+
+      {confirm && (
+        <ConfirmDialog
+          open={confirm !== null}
+          onClose={() => setConfirm(null)}
+          title={confirm.title}
+          message={confirm.message}
+          confirmLabel={confirm.confirmLabel}
+          loading={deleting}
+          onConfirm={confirm.onConfirm}
+        />
+      )}
     </Shell>
   )
 }

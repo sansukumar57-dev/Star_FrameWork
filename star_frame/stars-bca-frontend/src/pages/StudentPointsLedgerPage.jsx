@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
+import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell } from 'recharts'
 import { Card, EmptyState, LoadingState, PageHeader, Toast } from '../components/UI.jsx'
 import { getStudentPointsHistory } from '../utils/api.js'
 
@@ -62,6 +63,28 @@ export default function StudentPointsLedgerPage() {
     load()
   }, [])
 
+  const chartData = useMemo(() => {
+    const monthly = []
+    const byMonth = {}
+    ledger.forEach((entry) => {
+      const d = new Date(entry.date)
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+      byMonth[key] = byMonth[key] || 0
+      byMonth[key] += Number(entry.points) || 0
+    })
+    Object.keys(byMonth).sort().forEach((key) => {
+      const d = new Date(`${key}-01`)
+      monthly.push({
+        month: d.toLocaleDateString('en-IN', { month: 'short', year: '2-digit' }),
+        points: byMonth[key],
+        cumulative: 0,
+      })
+    })
+    let running = 0
+    monthly.forEach((entry) => { running += entry.points; entry.cumulative = running })
+    return monthly
+  }, [ledger])
+
   if (loading) return <LoadingState rows={4} />
 
   const groups = groupByMonth(ledger)
@@ -83,6 +106,46 @@ export default function StudentPointsLedgerPage() {
           <p className="mt-2 font-mono text-4xl font-semibold tabular-nums leading-none text-ink">{ledger.length}</p>
         </Card>
       </div>
+
+      {/* Chart */}
+      {chartData.length > 0 && (
+        <Card className="p-5">
+          <h2 className="font-display text-lg font-semibold tracking-tight text-ink">Points earned over time</h2>
+          <p className="mt-1 text-sm text-slate-400">Monthly points earned with a running cumulative total.</p>
+          <div className="mt-4 h-64 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={chartData} barGap={4}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--color-rule)" vertical={false} />
+                <XAxis dataKey="month" tick={{ fill: 'var(--color-slate-400)', fontSize: 11 }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fill: 'var(--color-slate-400)', fontSize: 11 }} axisLine={false} tickLine={false} width={36} />
+                <Tooltip
+                  formatter={(value, name) => [value, name === 'points' ? 'Points earned' : 'Cumulative points']}
+                  contentStyle={{ borderRadius: 8, border: '1px solid var(--color-rule)', background: 'var(--color-card)' }}
+                />
+                <Bar dataKey="points" radius={[3, 3, 0, 0]} fill="var(--color-brand-500)">
+                  {chartData.map((entry, index) => (
+                    <Cell key={`${entry.month}-${index}`} fill={entry.points >= 0 ? 'var(--color-brand-500)' : 'var(--color-rose-400)'} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="mt-2 h-40 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--color-rule)" vertical={false} />
+                <XAxis dataKey="month" tick={{ fill: 'var(--color-slate-400)', fontSize: 11 }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fill: 'var(--color-slate-400)', fontSize: 11 }} axisLine={false} tickLine={false} width={36} />
+                <Tooltip
+                  formatter={(value, name) => [value, name === 'cumulative' ? 'Cumulative points' : value]}
+                  contentStyle={{ borderRadius: 8, border: '1px solid var(--color-rule)', background: 'var(--color-card)' }}
+                />
+                <Line type="monotone" dataKey="cumulative" stroke="var(--color-leaf-500)" strokeWidth={2} dot={{ r: 3 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+      )}
 
       {/* Timeline */}
       {groups.length > 0 ? (

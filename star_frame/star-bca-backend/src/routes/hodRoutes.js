@@ -12,6 +12,7 @@ const {
   exportSubmissions,
   lockSemester,
   unlockSemester,
+  getSemesterStatus,
   runAiReview,
 } = require('../controllers/hodController');
 
@@ -34,5 +35,6 @@ router.put('/submission/:id/reject', rejectSubmission);
 router.post('/submission/:id/ai-review', runAiReview);
 router.put('/semester/lock', lockSemester);
 router.put('/semester/unlock', unlockSemester);
+router.get('/semester/status', getSemesterStatus);
 
 module.exports = router;

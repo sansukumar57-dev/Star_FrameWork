@@ -6,15 +6,15 @@ function getDepartment() {
   try {
     const raw = localStorage.getItem('stars_user')
     const user = raw ? JSON.parse(raw) : null
-    return user?.department || user?.departmentName || 'BCA'
+    return user?.department || user?.departmentName || user?.school || 'BCA'
   } catch {
     return 'BCA'
   }
 }
 
-export default function LoadingScreen({ onComplete }) {
+export default function LoadingScreen({ onComplete, department: departmentProp }) {
   const [progress, setProgress] = useState(0)
-  const department = getDepartment()
+  const department = departmentProp || getDepartment()
 
   useEffect(() => {
     const duration = 2500
@@ -75,7 +75,7 @@ export default function LoadingScreen({ onComplete }) {
           aria-valuenow={Math.round(progress)}
         >
           <div className="progress-track">
-            <div className="progress-bar" style={{ width: `${progress}%` }} />
+            <div className="progress-bar" style={{ transform: `scaleX(${progress / 100})` }} />
           </div>
           <span className="progress-value">{Math.round(progress)}%</span>
         </div>

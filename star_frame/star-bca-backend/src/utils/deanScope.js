@@ -21,10 +21,6 @@ const validateDepartmentPayload = (payload, req) => {
     errors.push('School is required');
   }
 
-  if (req?.user?.accountType === 'dean' && req?.user?.schoolId && normalized.schoolId && normalized.schoolId !== req.user.schoolId.toString()) {
-    errors.push('Dean accounts can only manage departments in their own school');
-  }
-
   return { ok: errors.length === 0, errors, normalized };
 };
 

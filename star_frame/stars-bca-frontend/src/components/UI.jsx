@@ -7,9 +7,18 @@ const LEDGER_TICKS = {
   leaf: 'bg-leaf-500',
   amber: 'bg-amber-500',
   rose: 'bg-rose-500',
+  slate: 'bg-slate-400',
 }
 
-export function StatCard({ label, value, sub, accent = 'brand', icon: _icon, onClick }) {
+const STAT_ICONS = {
+  brand: '◈',
+  leaf: '✓',
+  amber: '◔',
+  rose: '✕',
+  slate: '·',
+}
+
+export function StatCard({ label, value, sub, accent = 'brand', icon = STAT_ICONS[accent] || '·', onClick }) {
   return (
     <div
       onClick={onClick}
@@ -18,9 +27,20 @@ export function StatCard({ label, value, sub, accent = 'brand', icon: _icon, onC
       }`}
     >
       <span className={`absolute inset-y-0 left-0 w-[3px] ${LEDGER_TICKS[accent] || LEDGER_TICKS.brand}`} aria-hidden="true" />
-      <p className="font-display text-[11px] uppercase tracking-[0.18em] text-slate-500">{label}</p>
-      <p className="tabular mt-2 font-display text-3xl font-semibold leading-none text-ink">{value}</p>
-      {sub && <p className="mt-1.5 text-xs text-slate-400">{sub}</p>}
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="font-display text-[11px] uppercase tracking-[0.18em] text-slate-500">{label}</p>
+          <p className="tabular mt-2 font-display text-3xl font-semibold leading-none text-ink">{value}</p>
+          {sub && <p className="mt-1.5 text-xs text-slate-400">{sub}</p>}
+        </div>
+        {icon ? (
+          <span aria-hidden="true" className={`mt-0.5 shrink-0 flex h-8 w-8 items-center justify-center rounded-md font-mono text-sm ${
+            accent === 'leaf' ? 'bg-leaf-100 text-leaf-600' : accent === 'amber' ? 'bg-amber-100 text-amber-700' : accent === 'rose' ? 'bg-rose-100 text-rose-600' : accent === 'slate' ? 'bg-slate-100 text-slate-600' : 'bg-brand-100 text-brand-700'
+          }`}>
+            {icon}
+          </span>
+        ) : null}
+      </div>
     </div>
   )
 }
@@ -36,12 +56,23 @@ const STATUS_TONES = {
   Inactive: 'bg-rose-50 text-rose-600 border-rose-200',
 }
 
+export const STATUS_LABELS = {
+  Approved: 'Approved',
+  Pending: 'Under Review',
+  FacultyApproved: 'Pending HOD Review',
+  HODApproved: 'Fully Approved',
+  Rejected: 'Rejected',
+  HODRejected: 'Rejected by HOD',
+  Active: 'Active',
+  Inactive: 'Inactive',
+}
+
 export function StatusBadge({ status }) {
   const tone = STATUS_TONES[status] || 'bg-slate-100 text-slate-600 border-slate-200'
   return (
     <span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-0.5 font-mono text-[11px] font-medium ${tone}`}>
       <span className="h-1.5 w-1.5 rounded-full bg-current" />
-      {status}
+      {STATUS_LABELS[status] || status}
     </span>
   )
 }
@@ -81,12 +112,13 @@ export function ProgressRing({ percent = 0, size: _size = 88, stroke: _stroke = 
   )
 }
 
-export function Modal({ open, onClose, title, subtitle, children, footer }) {
+export function Modal({ open, onClose, title, subtitle, children, footer, size = 'lg' }) {
   if (!open) return null
+  const maxWidth = size === 'md' ? 'max-w-xl lg:max-w-2xl' : 'max-w-[90vw] lg:max-w-[1280px]'
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 lg:p-6" role="dialog" aria-modal="true">
       <div className="absolute inset-0 bg-ink/60" onClick={onClose} />
-      <div className="relative flex max-h-[92vh] w-full max-w-[90vw] flex-col overflow-hidden rounded-xl border border-rule bg-card shadow-modal lg:max-w-[1280px]">
+      <div className={`relative flex max-h-[92vh] w-full ${maxWidth} flex-col overflow-hidden rounded-xl border border-rule bg-card shadow-modal`}>
         <div className="flex items-center justify-between border-b border-rule px-5 py-4 sm:px-6">
           <div className="min-w-0">
             <h3 className="truncate font-display text-lg font-semibold text-ink">{title}</h3>
@@ -170,9 +202,10 @@ export function Input({ className = '', invalid, ...props }) {
   return <input className={`${inputBase} ${invalid ? '!border-rose-300 !bg-rose-50' : ''} ${className}`} {...props} />
 }
 
-export function Select({ className = '', invalid, children, ...props }) {
+export function Select({ className = '', invalid, value, children, ...props }) {
+  const isEmpty = value === undefined || value === null || value === ''
   return (
-    <select className={`${inputBase} ${invalid ? '!border-rose-300 !bg-rose-50' : ''} ${className}`} {...props}>
+    <select className={`${inputBase} ${invalid ? '!border-rose-300 !bg-rose-50 !text-rose-700' : ''} ${isEmpty && !invalid ? 'text-slate-400' : ''} ${className}`} value={value} {...props}>
       {children}
     </select>
   )
@@ -213,10 +246,20 @@ export function Card({ className = '', children, ...props }) {
   )
 }
 
-export function PageHeader({ title, subtitle, actions }) {
+export function PageHeader({ title, subtitle, actions, crumbs = [] }) {
   return (
     <div className="mb-8 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
       <div className="min-w-0">
+        {crumbs.length > 0 && (
+          <nav aria-label="Breadcrumb" className="mb-1.5 flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-[0.1em] text-slate-400">
+            {crumbs.map((crumb, index) => (
+              <span key={crumb} className="flex items-center gap-1.5">
+                {index > 0 && <span aria-hidden="true">/</span>}
+                <span className={index === crumbs.length - 1 ? 'text-ink' : ''}>{crumb}</span>
+              </span>
+            ))}
+          </nav>
+        )}
         <h1 className="font-display text-2xl font-semibold leading-tight tracking-tight text-ink md:text-3xl">{title}</h1>
         {subtitle && <p className="mt-1.5 text-sm text-slate-500">{subtitle}</p>}
       </div>
@@ -228,8 +271,15 @@ export function PageHeader({ title, subtitle, actions }) {
 export function EmptyState({ icon = '·', title, description, action }) {
   return (
     <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-rule bg-card/50 px-6 py-12 text-center">
-      <div className="flex h-10 w-10 items-center justify-center rounded-md border border-rule bg-paper font-display text-lg text-slate-400">{icon}</div>
-      <p className="mt-3 font-display text-base font-semibold text-ink">{title}</p>
+      <div className="flex h-16 w-16 items-center justify-center rounded-full border border-rule bg-paper shadow-soft">
+        <svg viewBox="0 0 48 48" fill="none" className="h-8 w-8" aria-hidden="true">
+          <circle cx="24" cy="24" r="20" stroke="var(--color-rule)" strokeWidth="2" />
+          <circle cx="24" cy="24" r="13" stroke="var(--color-rule)" strokeWidth="2" />
+          <path d="M24 4v7M24 37v7M4 24h7M37 24h7" stroke="var(--color-slate-400)" strokeWidth="2" strokeLinecap="round" />
+          <text x="24" y="28" textAnchor="middle" fontSize="9" fill="var(--color-brand-500)" fontWeight="600">{icon}</text>
+        </svg>
+      </div>
+      <p className="mt-4 font-display text-base font-semibold text-ink">{title}</p>
       {description && <p className="mt-1 max-w-sm text-sm text-slate-400">{description}</p>}
       {action && <div className="mt-4">{action}</div>}
     </div>
@@ -241,9 +291,16 @@ export function LoadingState({ rows = 1, className = '' }) {
     <div className={`space-y-3 animate-pulse ${className}`}>
       {Array.from({ length: rows }).map((_, index) => (
         <div key={index} className="rounded-lg border border-rule bg-card p-5">
-          <div className="h-4 w-1/3 rounded bg-slate-200" />
+          <div className="flex items-center justify-between">
+            <div className="h-4 w-1/3 rounded bg-slate-200" />
+            <div className="h-6 w-14 rounded-full bg-slate-100" />
+          </div>
           <div className="mt-3 h-3 w-full rounded bg-slate-100" />
           <div className="mt-2 h-3 w-2/3 rounded bg-slate-100" />
+          <div className="mt-3 flex items-center gap-2">
+            <div className="h-3 w-16 rounded bg-slate-100" />
+            <div className="h-3 w-24 rounded bg-slate-100" />
+          </div>
         </div>
       ))}
     </div>

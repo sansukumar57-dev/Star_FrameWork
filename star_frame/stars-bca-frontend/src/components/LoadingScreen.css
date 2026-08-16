@@ -160,7 +160,10 @@
   height: 100%;
   border-radius: 999px;
   background: linear-gradient(90deg, #2c4d90, #208d49);
-  transition: width 60ms linear;
+  transform-origin: left center;
+  transform: scaleX(0);
+  transition: transform 60ms linear;
+  will-change: transform;
 }
 
 .progress-value {

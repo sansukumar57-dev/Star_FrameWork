@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Cell } from 'recharts'
-import { StatCard, PageHeader, Card, EmptyState, Button, Toast, LoadingState } from '../components/UI.jsx'
+import { StatCard, PageHeader, Card, EmptyState, Button, Toast, LoadingState, STATUS_LABELS } from '../components/UI.jsx'
 import StarRing from '../components/StarRing.jsx'
 import { downloadProgressCard, getStudentLeaderboard, getStudentCoachInsights } from '../utils/api.js'
 
@@ -35,7 +36,9 @@ function normalizeVerticalKey(value = '') {
 }
 
 export default function StudentDashboardHome({ student, points, completed, pendingTasks, pendingReview, submissions, recent, activities = [] }) {
+  const navigate = useNavigate()
   const percent = Math.min(100, Math.round((points / 500) * 100))
+  const rejected = submissions.filter((s) => s.status === 'Rejected' || s.status === 'HODRejected').length
   const [streak, setStreak] = useState(0)
   const [downloading, setDownloading] = useState(false)
   const [toast, setToast] = useState('')
@@ -50,12 +53,29 @@ export default function StudentDashboardHome({ student, points, completed, pendi
 
   const studentId = student?._id || student?.id
 
-  async function loadCoach() {
+  async function loadCoach(force = false) {
     if (!studentId) return
+    const cacheKey = `coach_${studentId}`
+    if (!force) {
+      try {
+        const cached = JSON.parse(sessionStorage.getItem(cacheKey) || 'null')
+        if (cached && Date.now() - cached.ts < 15 * 60 * 1000) {
+          setCoach(cached.data)
+          return
+        }
+      } catch {
+        /* sessionStorage unavailable */
+      }
+    }
     setCoachLoading(true)
     try {
       const res = await getStudentCoachInsights(studentId)
       setCoach(res.data || null)
+      try {
+        sessionStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), data: res.data || null }))
+      } catch {
+        /* sessionStorage unavailable */
+      }
     } catch (error) {
       setToast(error.message || 'Unable to load AI coach')
     } finally {
@@ -184,6 +204,7 @@ export default function StudentDashboardHome({ student, points, completed, pendi
       <PageHeader
         title="Your STAR Dashboard"
         subtitle={`Register No. ${student.registerNumber || student.regNo || student.register || '—'}`}
+        crumbs={['Student', 'Dashboard']}
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <Button variant="outline" onClick={handleDownloadCard} loading={downloading}>⬇ Progress Card (PDF)</Button>
@@ -216,18 +237,66 @@ export default function StudentDashboardHome({ student, points, completed, pendi
             expanded={starExpanded}
             onToggle={() => setStarExpanded((value) => !value)}
           />
-          {streak > 0 && (
+          {streak > 0 ? (
             <span className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 font-mono text-[11px] font-medium text-amber-700">
               🔥 {streak} week{streak === 1 ? '' : 's'} streak
             </span>
+          ) : (
+            <span className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-brand-200 bg-brand-50 px-3 py-1 font-mono text-[11px] font-medium text-brand-700">
+              ✦ Start a streak — submit new evidence this week
+            </span>
           )}
         </Card>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 lg:col-span-8">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:col-span-8 lg:grid-cols-4">
           <StatCard label="Total Points" value={points} sub="Earned so far" accent="brand" />
           <StatCard label="Completed Tasks" value={completed} sub={`${submissions.length} total submitted`} accent="leaf" />
-          <StatCard label="Pending Tasks" value={pendingTasks.length} sub={`${pendingReview} awaiting review`} accent="amber" />
+          <StatCard label="Pending Tasks" value={pendingTasks.length} sub="Not yet submitted" accent="amber" />
+          <StatCard label="Awaiting Review" value={pendingReview} sub={`${rejected} rejected`} accent="slate" />
         </div>
       </div>
+
+      {/* Vertical progress overview */}
+      <Card className="p-6">
+        <div className="flex flex-col gap-1 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h2 className="font-display text-lg font-semibold tracking-tight text-ink">STAR Vertical Progress</h2>
+            <p className="mt-1 text-sm text-slate-400">Which of the 10 STAR verticals you&apos;ve started vs. still pending.</p>
+          </div>
+          <span className="inline-flex w-fit items-center rounded-full border border-rule bg-paper px-3 py-1 font-mono text-[11px] text-slate-500">
+            {summaryStats.participated} active · {summaryStats.remaining} pending
+          </span>
+        </div>
+        <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          {verticalAnalytics.map((vertical) => {
+            const active = vertical.completed > 0
+            const pendingCount = Math.max(0, vertical.totalActivities - vertical.completed)
+            return (
+              <div
+                key={vertical.name}
+                className={`flex items-start gap-3 rounded-md border p-3 ${
+                  active ? 'border-leaf-200 bg-leaf-50/60' : 'border-rule bg-paper'
+                }`}
+              >
+                <span className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full font-mono text-[11px] font-semibold ${
+                  active ? 'bg-leaf-500 text-white' : 'bg-slate-100 text-slate-400'
+                }`}>
+                  {active ? '✓' : '·'}
+                </span>
+                <div className="min-w-0">
+                  <p className={`truncate text-xs font-medium ${active ? 'text-leaf-700' : 'text-slate-500'}`}>
+                    {vertical.name.replace(/Vertical\s*\d+\s*-\s*/, '')}
+                  </p>
+                  <p className="mt-0.5 font-mono text-[10px] text-slate-400">
+                    {active
+                      ? `${vertical.completed} complete · ${vertical.points} pts`
+                      : pendingCount > 0 ? `${pendingCount} task${pendingCount === 1 ? '' : 's'} pending` : 'No tasks yet'}
+                  </p>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </Card>
 
       {/* Level progression */}
       <Card className="p-6">
@@ -278,7 +347,7 @@ export default function StudentDashboardHome({ student, points, completed, pendi
                 ✦ {coach.provider === 'rule-engine' ? 'Rule engine' : coach.provider}
               </span>
             )}
-            <Button variant="outline" size="sm" onClick={loadCoach} loading={coachLoading}>Refresh</Button>
+            <Button variant="outline" size="sm" onClick={() => loadCoach(true)} loading={coachLoading}>Refresh</Button>
           </div>
         </div>
 
@@ -370,7 +439,7 @@ export default function StudentDashboardHome({ student, points, completed, pendi
                   earned ? 'border-amber-200 bg-amber-50/70' : 'border-rule bg-paper opacity-70'
                 }`}
               >
-                <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full font-mono text-sm ${earned ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-400'}`}>
+                <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full font-mono text-sm ${earned ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-500'}`}>
                   {badge.icon}
                 </span>
                 <div className="min-w-0">
@@ -403,12 +472,12 @@ export default function StudentDashboardHome({ student, points, completed, pendi
                   contentStyle={{ borderRadius: 8, border: '1px solid var(--color-rule)', background: 'var(--color-card)' }}
                 />
                 <Legend />
-                <Bar dataKey="completed" radius={[3, 3, 0, 0]} fill="var(--color-brand-500)">
+                <Bar dataKey="completed" name="Completed Activities" radius={[3, 3, 0, 0]} fill="var(--color-brand-500)">
                   {chartData.map((entry, index) => (
                     <Cell key={`${entry.name}-${index}`} fill={entry.completed > 0 ? 'var(--color-brand-500)' : 'var(--color-slate-300)'} />
                   ))}
                 </Bar>
-                <Bar dataKey="points" radius={[3, 3, 0, 0]} fill="var(--color-leaf-500)" />
+                <Bar dataKey="points" name="Points Earned" radius={[3, 3, 0, 0]} fill="var(--color-leaf-500)" />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -448,18 +517,21 @@ export default function StudentDashboardHome({ student, points, completed, pendi
         </Card>
 
         <Card className="p-6">
-          <h2 className="font-display text-lg font-semibold tracking-tight text-ink">Recent Activity</h2>
+          <div className="flex items-start justify-between gap-2">
+            <h2 className="font-display text-lg font-semibold tracking-tight text-ink">Recent Activity</h2>
+            <Button variant="ghost" size="sm" onClick={() => navigate('/student/submissions')}>View all submissions →</Button>
+          </div>
           {recent.length > 0 ? (
             <ul className="mt-2">
               {recent.map((item) => (
                 <li key={item._id} className="border-t border-rule py-3">
                   <div className="flex items-start gap-3">
                     <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-paper font-mono text-[11px] text-brand-500">
-                      {item.status === 'Approved' ? '✓' : item.status === 'Rejected' ? '✕' : '…'}
+                      {item.status === 'Approved' ? '✓' : item.status === 'Rejected' || item.status === 'HODRejected' ? '✕' : '…'}
                     </span>
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium text-ink">{item.activityId?.activityName || 'Activity'}</p>
-                      <p className="font-mono text-xs text-slate-400">{item.status} · {new Date(item.submittedAt).toLocaleDateString()}</p>
+                      <p className="font-mono text-xs text-slate-400">{STATUS_LABELS[item.status] || item.status} · {new Date(item.submittedAt).toLocaleDateString()}</p>
                     </div>
                   </div>
                 </li>

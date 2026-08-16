@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react'
-import { BarChart, Bar, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { BarChart, Bar, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis, Cell } from 'recharts'
 import Shell, { NAV } from '../components/Shell.jsx'
-import { StatCard, Button, PageHeader, Card, Toast, ConfirmDialog, Field, Input, Select, EmptyState, StatusBadge, LoadingState } from '../components/UI.jsx'
+import { StatCard, Button, PageHeader, Card, Toast, ConfirmDialog, Field, Input, Select, EmptyState, StatusBadge, LoadingState, Modal } from '../components/UI.jsx'
 import AiInsightsPanel from '../components/AiInsightsPanel.jsx'
 import {
   getAdminUsers,
@@ -16,6 +16,14 @@ import {
   exportAnalytics,
   downloadAdminReport,
   getDepartmentAiSummary,
+  getDepartmentStats,
+  getTrendAnalytics,
+  getAuditLogs,
+  deleteAuditLog,
+  getSchools,
+  createSchool,
+  updateSchool,
+  deleteSchool,
 } from '../utils/api.js'
 
 /* Hallmark · genre: editorial · macrostructure: Workbench · design-system: design.md · designed-as-app */
@@ -54,17 +62,30 @@ const initialUserForm = {
   section: '',
 }
 
-export default function PrincipalDashboard() {
+const initialSchoolForm = {
+  name: '',
+  code: '',
+  description: '',
+  status: 'Active',
+}
+
+export default function PrincipalDashboard({ embedded = false }) {
   const [users, setUsers] = useState([])
   const [query, setQuery] = useState('')
   const [form, setForm] = useState(initialUserForm)
   const [departmentForm, setDepartmentForm] = useState(initialDepartmentForm)
   const [hodForm, setHodForm] = useState(initialHodForm)
   const [editingId, setEditingId] = useState('')
+  const [userPanelOpen, setUserPanelOpen] = useState(false)
   const [toast, setToast] = useState(null)
   const [loading, setLoading] = useState(true)
   const [analytics, setAnalytics] = useState([])
   const [lookups, setLookups] = useState({ schools: [], departments: [], faculty: [] })
+  const [schools, setSchools] = useState([])
+  const [schoolForm, setSchoolForm] = useState(initialSchoolForm)
+  const [schoolPanelOpen, setSchoolPanelOpen] = useState(false)
+  const [editingSchoolId, setEditingSchoolId] = useState('')
+  const [savingSchool, setSavingSchool] = useState(false)
   const [selectedFaculty, setSelectedFaculty] = useState('all')
   const [selectedDepartment, setSelectedDepartment] = useState('all')
   const [confirm, setConfirm] = useState(null)
@@ -73,6 +94,12 @@ export default function PrincipalDashboard() {
   const [reporting, setReporting] = useState(false)
   const [aiSummary, setAiSummary] = useState('')
   const [aiSummaryLoading, setAiSummaryLoading] = useState(false)
+  const [deptStats, setDeptStats] = useState({ departments: [], verticalByDept: {} })
+  const [trends, setTrends] = useState({ series: [], narrative: '', forecast: null })
+  const [auditLogs, setAuditLogs] = useState([])
+  const [studentsPage, setStudentsPage] = useState(1)
+  const STUDENTS_PER_PAGE = 10
+  const [loadErrors, setLoadErrors] = useState({})
 
   const currentUser = useMemo(() => {
     try {
@@ -115,8 +142,11 @@ export default function PrincipalDashboard() {
     }
   }
 
-  const isDean = currentUser?.accountType === 'dean'
-  const isHod = currentUser?.accountType === 'hod'
+  const selectedPortal = (() => {
+    try { return localStorage.getItem('stars_portal') || '' } catch { return '' }
+  })()
+  const isDean = selectedPortal === 'dean' || (!selectedPortal && currentUser?.accountType === 'dean')
+  const isHod = selectedPortal === 'hod' || (!selectedPortal && currentUser?.accountType === 'hod')
 
   const deanNav = useMemo(() => {
     if (!isDean) return null
@@ -125,14 +155,18 @@ export default function PrincipalDashboard() {
 
   const notify = useCallback((message, tone = 'success') => {
     setToast({ message, tone })
-    window.setTimeout(() => setToast(null), 3200)
+    if (tone !== 'error') window.setTimeout(() => setToast(null), 3200)
   }, [])
 
   useEffect(() => {
     loadUsers()
     loadLookups()
+    loadSchools()
     loadAnalytics()
     loadAiSummary()
+    loadDepartmentStats()
+    loadTrends()
+    loadAuditLogs()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -163,8 +197,78 @@ export default function PrincipalDashboard() {
     try {
       const data = await getLookups()
       setLookups(data.data || { schools: [], departments: [], faculty: [] })
+      setLoadErrors((prev) => ({ ...prev, lookups: false }))
     } catch (error) {
       console.error(error)
+      setLoadErrors((prev) => ({ ...prev, lookups: true }))
+    }
+  }
+
+  async function loadSchools() {
+    try {
+      const data = await getSchools()
+      setSchools(data.data || [])
+      setLoadErrors((prev) => ({ ...prev, schools: false }))
+    } catch (error) {
+      console.error(error)
+      setLoadErrors((prev) => ({ ...prev, schools: true }))
+    }
+  }
+
+  async function submitSchool(e) {
+    e.preventDefault()
+    setSavingSchool(true)
+    try {
+      if (editingSchoolId) {
+        await updateSchool(editingSchoolId, schoolForm)
+        notify('School updated successfully.')
+      } else {
+        await createSchool(schoolForm)
+        notify('School created successfully.')
+      }
+      setSchoolPanelOpen(false)
+      setSchoolForm(initialSchoolForm)
+      setEditingSchoolId('')
+      await Promise.all([loadSchools(), loadLookups()])
+    } catch (error) {
+      notify(error.message || 'Unable to save school', 'error')
+    } finally {
+      setSavingSchool(false)
+    }
+  }
+
+  function startEditingSchool(school) {
+    setEditingSchoolId(school._id)
+    setSchoolForm({
+      name: school.name || '',
+      code: school.code || '',
+      description: school.description || '',
+      status: school.status || 'Active',
+    })
+    setSchoolPanelOpen(true)
+  }
+
+  async function confirmDeleteSchool(id) {
+    try {
+      await deleteSchool(id)
+      notify('School deleted successfully.')
+      await Promise.all([loadSchools(), loadLookups()])
+    } catch (error) {
+      notify(error.message || 'Unable to delete school', 'error')
+    } finally {
+      setConfirm(null)
+    }
+  }
+
+  async function confirmDeleteRecentLog(id) {
+    try {
+      await deleteAuditLog(id)
+      notify('Audit log removed.', 'success')
+      await loadAuditLogs()
+    } catch (error) {
+      notify(error.message || 'Unable to delete audit log', 'error')
+    } finally {
+      setConfirm(null)
     }
   }
 
@@ -172,8 +276,47 @@ export default function PrincipalDashboard() {
     try {
       const data = await getAnalytics()
       setAnalytics(data.data?.chartData || [])
+      setLoadErrors((prev) => ({ ...prev, analytics: false }))
     } catch (error) {
       console.error(error)
+      setLoadErrors((prev) => ({ ...prev, analytics: true }))
+    }
+  }
+
+  async function loadDepartmentStats() {
+    try {
+      const data = await getDepartmentStats()
+      setDeptStats({ departments: data.data?.departments || [], verticalByDept: data.data?.verticalByDept || {} })
+      setLoadErrors((prev) => ({ ...prev, deptStats: false }))
+    } catch (error) {
+      console.error(error)
+      setLoadErrors((prev) => ({ ...prev, deptStats: true }))
+    }
+  }
+
+  async function loadTrends() {
+    try {
+      const data = await getTrendAnalytics(6)
+      setTrends({
+        series: data.data?.series || [],
+        narrative: data.data?.narrative?.text || '',
+        forecast: data.data?.forecast || null,
+      })
+      setLoadErrors((prev) => ({ ...prev, trends: false }))
+    } catch (error) {
+      console.error(error)
+      setLoadErrors((prev) => ({ ...prev, trends: true }))
+    }
+  }
+
+  async function loadAuditLogs() {
+    try {
+      const data = await getAuditLogs(1, 8)
+      setAuditLogs(data.data?.logs || [])
+      setLoadErrors((prev) => ({ ...prev, auditLogs: false }))
+    } catch (error) {
+      console.error(error)
+      setLoadErrors((prev) => ({ ...prev, auditLogs: true }))
     }
   }
 
@@ -266,6 +409,31 @@ export default function PrincipalDashboard() {
 
   const chartTitle = isDean ? 'Department performance across your school' : isHod ? 'Year-level student performance' : 'Performance overview'
 
+  const verticalChartData = useMemo(() => {
+    const totals = new Map()
+    Object.values(deptStats.verticalByDept || {}).forEach((verticalMap) => {
+      Object.entries(verticalMap || {}).forEach(([vertical, points]) => {
+        totals.set(vertical, (totals.get(vertical) || 0) + Number(points))
+      })
+    })
+    const colors = ['var(--color-brand-500)', 'var(--color-leaf-500)', 'var(--color-amber-500)', 'var(--color-rose-400)', 'var(--color-sky-500)', 'var(--color-violet-500)', 'var(--color-slate-500)', 'var(--color-teal-500)']
+    return Array.from(totals.entries())
+      .map(([name, points], index) => ({ name, points, fill: colors[index % colors.length] }))
+      .sort((a, b) => b.points - a.points)
+  }, [deptStats.verticalByDept])
+
+  const paginatedStudents = useMemo(() => {
+    const list = filteredStudentUsers || []
+    const start = (studentsPage - 1) * STUDENTS_PER_PAGE
+    return list.slice(start, start + STUDENTS_PER_PAGE)
+  }, [filteredStudentUsers, studentsPage])
+
+  const totalStudentPages = useMemo(() => Math.max(1, Math.ceil((filteredStudentUsers || []).length / STUDENTS_PER_PAGE)), [filteredStudentUsers])
+
+  useEffect(() => {
+    setStudentsPage(1)
+  }, [selectedFaculty, query])
+
   const deanDepartmentOptions = useMemo(() => {
     if (!isDean) return []
     return lookups.departments.filter((department) => {
@@ -334,6 +502,10 @@ export default function PrincipalDashboard() {
         department: form.department || currentUser.department || '',
       }
 
+      if (isDean) {
+        payload.role = 'admin'
+        payload.accountType = 'hod'
+      }
       if (isDean && (payload.role !== 'admin' || payload.accountType !== 'hod')) {
         throw new Error('Dean accounts can only add HOD users.')
       }
@@ -349,6 +521,7 @@ export default function PrincipalDashboard() {
 
       setForm(initialUserForm)
       setEditingId('')
+      setUserPanelOpen(false)
       notify(editingId ? 'User updated successfully.' : 'User added successfully.')
       await Promise.all([loadUsers(), loadLookups(), loadAnalytics()])
     } catch (error) {
@@ -381,6 +554,7 @@ export default function PrincipalDashboard() {
 
   function startEditingUser(user) {
     setEditingId(user._id)
+    setUserPanelOpen(true)
     setForm({
       role: user.role || 'student',
       accountType: user.accountType || 'hod',
@@ -418,7 +592,7 @@ export default function PrincipalDashboard() {
         </Button>
         <Button
           size="sm"
-          variant="outline"
+          variant="danger"
           onClick={() =>
             setConfirm({
               id: user._id,
@@ -452,15 +626,17 @@ export default function PrincipalDashboard() {
   }
 
   if (loading) {
-    return (
+    return embedded ? (
+      <LoadingState rows={3} />
+    ) : (
       <Shell role={isHod ? 'hod' : 'principal'} userName={currentUser.name || 'Admin'} department={currentUser.department || 'User Management'} navLinks={deanNav}>
         <LoadingState rows={3} />
       </Shell>
     )
   }
 
-  return (
-    <Shell role={isHod ? 'hod' : 'principal'} userName={currentUser.name || 'Admin'} department={currentUser.department || 'User Management'} navLinks={deanNav}>
+  const pageContent = (
+    <>
       <PageHeader
         title={isDean ? 'Dean Dashboard' : 'Admin Dashboard'}
         subtitle={
@@ -468,6 +644,7 @@ export default function PrincipalDashboard() {
             ? 'Review school-wide department performance and view the top students for each department.'
             : 'Track department performance, manage student records, and assign faculty quickly.'
         }
+        crumbs={[isDean ? 'Dean' : 'Admin', isDean ? 'Dashboard' : 'User Management']}
         actions={
           <div className="flex flex-wrap items-center gap-2">
             {!isDean && <Button variant="outline" onClick={handleReport} loading={reporting}>⬇ PDF Report</Button>}
@@ -513,9 +690,19 @@ export default function PrincipalDashboard() {
                     <XAxis dataKey="name" tickLine={false} axisLine={false} tick={{ fill: 'var(--color-slate-400)', fontSize: 12 }} />
                     <YAxis tickLine={false} axisLine={false} tick={{ fill: 'var(--color-slate-400)', fontSize: 12 }} width={40} />
                     <Tooltip cursor={{ fill: 'var(--color-paper)' }} contentStyle={{ borderRadius: 8, border: '1px solid var(--color-rule)', background: 'var(--color-card)' }} />
-                    <Bar dataKey="performance" fill="var(--color-brand-500)" radius={[3, 3, 0, 0]} maxBarSize={48} />
+                    <Bar dataKey="performance" name="Performance" radius={[3, 3, 0, 0]} maxBarSize={48}>
+                      {filteredAnalytics.map((entry, index) => (
+                        <Cell key={`${entry.name}-${index}`} fill={['var(--color-brand-500)', 'var(--color-leaf-500)', 'var(--color-amber-500)', 'var(--color-sky-500)', 'var(--color-violet-500)', 'var(--color-teal-500)'][index % 6]} />
+                      ))}
+                    </Bar>
                   </BarChart>
                 </ResponsiveContainer>
+              ) : loadErrors.analytics ? (
+                <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+                  <p className="text-sm font-medium text-ink">Could not load analytics</p>
+                  <p className="max-w-sm text-sm text-slate-400">Something went wrong while fetching analytics. Try again.</p>
+                  <Button variant="outline" size="sm" onClick={loadAnalytics}>Retry</Button>
+                </div>
               ) : (
                 <EmptyState icon="▤" title="No analytics data yet" description="Analytics will appear here once students start earning STAR points." />
               )}
@@ -533,7 +720,199 @@ export default function PrincipalDashboard() {
             {aiSummaryLoading ? <LoadingState rows={2} /> : <p className="text-sm leading-7 text-slate-600">{aiSummary || 'AI summary is not available yet.'}</p>}
           </Card>
 
+          <Card className="p-5">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <h2 className="font-display text-lg font-semibold text-ink">Performance Trends</h2>
+                <p className="text-sm text-slate-400 mt-1">Monthly STAR points with a 6-month forecast.</p>
+              </div>
+              <Button variant="outline" size="sm" onClick={loadTrends}>Refresh</Button>
+            </div>
+            {trends.series.length ? (
+              <>
+                <div className="h-60">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={trends.series}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="var(--color-rule)" vertical={false} />
+                      <XAxis dataKey="label" tickLine={false} axisLine={false} tick={{ fill: 'var(--color-slate-400)', fontSize: 11 }} />
+                      <YAxis tickLine={false} axisLine={false} tick={{ fill: 'var(--color-slate-400)', fontSize: 11 }} width={40} />
+                      <Tooltip cursor={{ fill: 'var(--color-paper)' }} contentStyle={{ borderRadius: 8, border: '1px solid var(--color-rule)', background: 'var(--color-card)' }} />
+                      <Bar dataKey="points" name="Points" fill="var(--color-brand-500)" radius={[3, 3, 0, 0]} maxBarSize={40} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+                {trends.forecast && (
+                  <p className="mt-3 inline-flex items-center gap-2 rounded-md border border-brand-200 bg-brand-50/60 px-3 py-2 font-mono text-xs text-brand-700">
+                    ⟶ {trends.forecast.nextMonth}: ~{trends.forecast.nextPoints} pts projected
+                  </p>
+                )}
+                {trends.narrative && <p className="mt-3 text-sm leading-7 text-slate-600">{trends.narrative}</p>}
+              </>
+            ) : loadErrors.trends ? (
+              <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-rule bg-card/50 px-6 py-12 text-center">
+                <p className="text-sm font-medium text-ink">Could not load trends</p>
+                <p className="max-w-sm text-sm text-slate-400">Something went wrong while fetching performance trends. Try again.</p>
+                <Button variant="outline" size="sm" onClick={loadTrends}>Retry</Button>
+              </div>
+            ) : (
+              <EmptyState icon="⟶" title="No trend data yet" description="Monthly trends will appear as students earn approved points." />
+            )}
+          </Card>
+
+          <Card className="p-5">
+            <div className="mb-4">
+              <h2 className="font-display text-lg font-semibold text-ink">Vertical-wise Institution Points</h2>
+              <p className="text-sm text-slate-400 mt-1">Approved STAR points by vertical across the institution.</p>
+            </div>
+            {verticalChartData.length ? (
+              <div className="h-64">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={verticalChartData} layout="vertical" margin={{ left: 8, right: 8 }}>
+                    <CartesianGrid horizontal={false} stroke="var(--color-rule)" />
+                    <XAxis type="number" tick={{ fontSize: 11, fill: 'var(--color-slate-400)' }} axisLine={false} tickLine={false} />
+                    <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: 'var(--color-slate-500)' }} axisLine={false} tickLine={false} width={96} />
+                    <Tooltip cursor={{ fill: 'var(--color-paper)' }} contentStyle={{ borderRadius: 8, border: '1px solid var(--color-rule)', background: 'var(--color-card)' }} />
+                    <Bar dataKey="points" radius={[0, 3, 3, 0]} maxBarSize={18}>
+                      {verticalChartData.map((entry) => <Cell key={entry.name} fill={entry.fill} />)}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            ) : loadErrors.deptStats ? (
+              <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-rule bg-card/50 px-6 py-12 text-center">
+                <p className="text-sm font-medium text-ink">Could not load vertical data</p>
+                <p className="max-w-sm text-sm text-slate-400">Something went wrong while fetching vertical-wise points. Try again.</p>
+                <Button variant="outline" size="sm" onClick={loadDepartmentStats}>Retry</Button>
+              </div>
+            ) : (
+              <EmptyState icon="▦" title="No vertical data" description="Vertical-wise points will appear once submissions are approved." />
+            )}
+          </Card>
+
+          <Card className="p-5">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <h2 className="font-display text-lg font-semibold text-ink">Recent Activity</h2>
+                <p className="text-sm text-slate-400 mt-1">Latest audit-log events across the system.</p>
+              </div>
+              <Button variant="outline" size="sm" onClick={loadAuditLogs}>Refresh</Button>
+            </div>
+            {auditLogs.length ? (
+              <div className="space-y-2">
+                {auditLogs.map((log) => (
+                  <div key={log._id} className="flex items-start gap-3 rounded-md border border-rule px-3 py-2.5 text-sm">
+                    <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-paper font-mono text-[10px] text-slate-400">·</span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate font-medium text-ink">{log.action}</p>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        {log.actorId?.name || 'System'} · {new Date(log.createdAt).toLocaleString('en-IN')}
+                      </p>
+                    </div>
+                    {!isHod && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() =>
+                          setConfirm({
+                            id: log._id,
+                            title: 'Remove audit log',
+                            message: `Remove this recent activity (${log.action})? This action cannot be undone.`,
+                            confirmLabel: 'Remove',
+                            onConfirm: () => confirmDeleteRecentLog(log._id),
+                          })
+                        }
+                      >
+                        &times;
+                      </Button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : loadErrors.auditLogs ? (
+              <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-rule bg-card/50 px-6 py-12 text-center">
+                <p className="text-sm font-medium text-ink">Could not load recent activity</p>
+                <p className="max-w-sm text-sm text-slate-400">Something went wrong while fetching audit logs. Try again.</p>
+                <Button variant="outline" size="sm" onClick={loadAuditLogs}>Retry</Button>
+              </div>
+            ) : (
+              <EmptyState icon="◷" title="No recent activity" description="Audit events will appear here as users take actions." />
+            )}
+          </Card>
+
           <AiInsightsPanel />
+
+          {!isHod && (
+            <Card className="p-5">
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between mb-4">
+                <div>
+                  <h2 className="font-display text-lg font-semibold text-ink">Schools</h2>
+                  <p className="text-sm text-slate-400 mt-1">Manage the schools available across the institution.</p>
+                </div>
+                <Button
+                  onClick={() => {
+                    setEditingSchoolId('')
+                    setSchoolForm(initialSchoolForm)
+                    setSchoolPanelOpen(true)
+                  }}
+                >
+                  + Add School
+                </Button>
+              </div>
+              {schools.length ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-paper/60 text-slate-400 text-[11px] uppercase tracking-[0.14em]">
+                      <tr>
+                        <th className="text-left font-medium px-3 py-2.5">School</th>
+                        <th className="text-left font-medium px-3 py-2.5">Code</th>
+                        <th className="text-left font-medium px-3 py-2.5">Description</th>
+                        <th className="text-left font-medium px-3 py-2.5">Status</th>
+                        <th className="text-right font-medium px-3 py-2.5">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {schools.map((school) => (
+                        <tr key={school._id} className="border-b border-rule transition-colors hover:bg-paper/60">
+                          <td className="px-3 py-2.5 font-medium text-ink">{school.name}</td>
+                          <td className="px-3 py-2.5 font-mono text-xs text-slate-500">{school.code || '—'}</td>
+                          <td className="px-3 py-2.5 text-slate-500 max-w-[220px] truncate">{school.description || '—'}</td>
+                          <td className="px-3 py-2.5"><StatusBadge status={school.status || 'Active'} /></td>
+                          <td className="px-3 py-2.5">
+                            <div className="flex items-center justify-end gap-1.5">
+                              <Button size="sm" variant="outline" onClick={() => startEditingSchool(school)}>Edit</Button>
+                              <Button
+                                size="sm"
+                                variant="danger"
+                                onClick={() =>
+                                  setConfirm({
+                                    id: school._id,
+                                    title: 'Delete school',
+                                    message: `Are you sure you want to delete ${school.name || 'this school'}? Schools with linked departments or users cannot be deleted.`,
+                                    confirmLabel: 'Delete',
+                                    onConfirm: () => confirmDeleteSchool(school._id),
+                                  })
+                                }
+                              >
+                                Delete
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : loadErrors.schools ? (
+                <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-rule bg-card/50 px-6 py-12 text-center">
+                  <p className="text-sm font-medium text-ink">Could not load schools</p>
+                  <p className="max-w-sm text-sm text-slate-400">Something went wrong while fetching schools. Try again.</p>
+                  <Button variant="outline" size="sm" onClick={loadSchools}>Retry</Button>
+                </div>
+              ) : (
+                <EmptyState icon="▣" title="No schools yet" description="Create a school to start organising departments, faculty and students." />
+              )}
+            </Card>
+          )}
 
           {isDean && (
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
@@ -548,10 +927,24 @@ export default function PrincipalDashboard() {
                     <Input required value={departmentForm.code} onChange={(e) => setDepartmentForm({ ...departmentForm, code: e.target.value })} placeholder="Code (for example BCA)" />
                   </Field>
                   <Field label="School">
-                    <Select value={departmentForm.schoolId} onChange={(e) => setDepartmentForm({ ...departmentForm, schoolId: e.target.value })}>
-                      <option value="">Select school</option>
-                      {lookups.schools.map((school) => <option key={school._id} value={school._id}>{school.name}</option>)}
-                    </Select>
+                    <div className="flex gap-2">
+                      <Select value={departmentForm.schoolId} onChange={(e) => setDepartmentForm({ ...departmentForm, schoolId: e.target.value })} className="flex-1">
+                        <option value="">Select school</option>
+                        {lookups.schools.map((school) => <option key={school._id} value={school._id}>{school.name}</option>)}
+                      </Select>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => {
+                          setEditingSchoolId('')
+                          setSchoolForm(initialSchoolForm)
+                          setSchoolPanelOpen(true)
+                        }}
+                      >
+                        + New
+                      </Button>
+                    </div>
+                    {!lookups.schools.length && <p className="mt-1.5 text-xs text-amber-700">No schools yet — create one first using &quot;+ New&quot;.</p>}
                   </Field>
                   <Field label="Status">
                     <Select value={departmentForm.status} onChange={(e) => setDepartmentForm({ ...departmentForm, status: e.target.value })}>
@@ -647,23 +1040,58 @@ export default function PrincipalDashboard() {
           </Card>
         ) : (
           <Card className="p-5 self-start">
-            <div className="flex items-center justify-between mb-4 gap-3">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <div>
-                <h2 className="font-display text-lg font-semibold text-ink">Create / Update User</h2>
-                <p className="text-sm text-slate-400 mt-1">Manage students, faculty, HODs, and deans from one form.</p>
+                <h2 className="font-display text-lg font-semibold text-ink">User Management</h2>
+                <p className="text-sm text-slate-400 mt-1">Add or edit students, faculty, HODs, and deans.</p>
               </div>
-              <Input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search users"
-                className="!w-auto min-w-[160px] !bg-card !border-rule"
-              />
+              <div className="flex items-center gap-2">
+                <Input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search users"
+                  className="!w-auto min-w-[160px] !bg-card !border-rule"
+                />
+        <Button onClick={() => {
+          setEditingId('')
+          setForm({
+            ...initialUserForm,
+            schoolId: isHod ? (currentUser.schoolId || '') : '',
+            school: isHod ? (currentUser.school || '') : '',
+            departmentId: isHod ? (currentUser.departmentId || '') : '',
+            department: isHod ? (currentUser.department || '') : '',
+          })
+          setUserPanelOpen(true)
+        }}>+ Add User</Button>
+              </div>
             </div>
+          </Card>
+        )}
+      </div>
 
-            <form onSubmit={submitUser} className="space-y-3">
+      <Modal
+        open={userPanelOpen}
+        onClose={() => { setUserPanelOpen(false); setEditingId(''); setForm(initialUserForm) }}
+        size="md"
+        title={editingId ? 'Edit User' : 'Add User'}
+        subtitle={editingId ? `Editing ${form.name || 'user'}` : 'Create a student, faculty, HOD, or dean account.'}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => { setUserPanelOpen(false); setEditingId(''); setForm(initialUserForm) }}>Cancel</Button>
+            <Button form="user-form" type="submit">{editingId ? 'Update User' : 'Create User'}</Button>
+          </>
+        }
+      >
+        {editingId && (
+          <div className="mb-4 flex items-center gap-2 rounded-md border border-brand-200 bg-brand-50/70 px-3 py-2 text-sm text-brand-700">
+            <span aria-hidden="true">✎</span>
+            <span>Editing <strong>{form.name || 'this user'}</strong> — changes are saved on submit.</span>
+          </div>
+        )}
+        <form id="user-form" onSubmit={submitUser} className="space-y-3">
               <Field label="Role">
                 <Select
-                  value={form.role}
+                  value={isDean ? 'admin' : form.role}
                   onChange={(e) => {
                     const nextRole = e.target.value
                     if (isDean) {
@@ -677,11 +1105,18 @@ export default function PrincipalDashboard() {
                     setForm({ ...form, role: nextRole, accountType: nextRole === 'admin' ? form.accountType || 'hod' : null })
                   }}
                 >
-                  <option value="student">Student</option>
-                  <option value="faculty">Faculty</option>
-                  {!isDean && !isHod && <option value="admin">Admin</option>}
-                  {isDean && <option value="admin">Admin (HOD)</option>}
+                  {isDean ? (
+                    <option value="admin">Admin (HOD)</option>
+                  ) : (
+                    <>
+                      <option value="student">Student</option>
+                      <option value="faculty">Faculty</option>
+                      {!isDean && !isHod && <option value="admin">Admin</option>}
+                      {isDean && <option value="admin">Admin (HOD)</option>}
+                    </>
+                  )}
                 </Select>
+                {isDean && <p className="mt-1.5 text-xs text-slate-500">Dean accounts can only create HOD users.</p>}
               </Field>
               {(form.role === 'admin' || isDean) && (
                 <Field label="Account type">
@@ -699,20 +1134,22 @@ export default function PrincipalDashboard() {
                   <Input required type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="Email" />
                 </Field>
               )}
-              <Field label="School">
-                <Select
-                  value={form.schoolId}
-                  onChange={(event) => {
-                    const selectedSchoolId = event.target.value
-                    const selectedSchool = lookups.schools.find((school) => school._id === selectedSchoolId)
-                    setForm({ ...form, schoolId: selectedSchoolId, school: selectedSchool?.name || '', departmentId: '', department: '' })
-                  }}
-                >
-                  <option value="">Select school</option>
-                  {lookups.schools.map((school) => <option key={school._id} value={school._id}>{school.name}</option>)}
-                </Select>
-              </Field>
-              {(form.role === 'student' || form.role === 'faculty' || (form.role === 'admin' && form.accountType === 'hod')) && (
+              {!isHod && (
+                <Field label="School">
+                  <Select
+                    value={form.schoolId}
+                    onChange={(event) => {
+                      const selectedSchoolId = event.target.value
+                      const selectedSchool = lookups.schools.find((school) => school._id === selectedSchoolId)
+                      setForm({ ...form, schoolId: selectedSchoolId, school: selectedSchool?.name || '', departmentId: '', department: '' })
+                    }}
+                  >
+                    <option value="">Select school</option>
+                    {lookups.schools.map((school) => <option key={school._id} value={school._id}>{school.name}</option>)}
+                  </Select>
+                </Field>
+              )}
+              {!isHod && (form.role === 'student' || form.role === 'faculty' || (form.role === 'admin' && form.accountType === 'hod')) && (
                 <Field label="Department">
                   <Select
                     value={form.departmentId}
@@ -726,6 +1163,12 @@ export default function PrincipalDashboard() {
                     {selectedDepartmentOptions.map((department) => <option key={department._id} value={department._id}>{department.name}</option>)}
                   </Select>
                 </Field>
+              )}
+              {isHod && (
+                <div className="rounded-md border border-rule bg-paper/60 px-3 py-2.5 text-sm">
+                  <p className="text-xs text-slate-400 mb-0.5">Department</p>
+                  <p className="font-medium text-ink">{currentUser.department || 'Your department'}</p>
+                </div>
               )}
               {form.role === 'student' && (
                 <Field label="Register number">
@@ -765,11 +1208,40 @@ export default function PrincipalDashboard() {
                   <Input required type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="Password" />
                 </Field>
               )}
-              <Button type="submit" className="w-full">{editingId ? 'Update User' : 'Create User'}</Button>
             </form>
-          </Card>
-        )}
-      </div>
+      </Modal>
+
+      <Modal
+        open={schoolPanelOpen}
+        onClose={() => { setSchoolPanelOpen(false); setEditingSchoolId(''); setSchoolForm(initialSchoolForm) }}
+        size="md"
+        title={editingSchoolId ? 'Edit School' : 'Add School'}
+        subtitle={editingSchoolId ? `Editing ${schoolForm.name || 'school'}` : 'Create a new school to organise departments, faculty, and students.'}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => { setSchoolPanelOpen(false); setEditingSchoolId(''); setSchoolForm(initialSchoolForm) }}>Cancel</Button>
+            <Button form="school-form" type="submit" loading={savingSchool}>{editingSchoolId ? 'Update School' : 'Create School'}</Button>
+          </>
+        }
+      >
+        <form id="school-form" onSubmit={submitSchool} className="space-y-3">
+          <Field label="School name">
+            <Input required value={schoolForm.name} onChange={(e) => setSchoolForm({ ...schoolForm, name: e.target.value })} placeholder="School name (for example STAR)" />
+          </Field>
+          <Field label="Code">
+            <Input value={schoolForm.code} onChange={(e) => setSchoolForm({ ...schoolForm, code: e.target.value })} placeholder="Code (for example STAR)" />
+          </Field>
+          <Field label="Description">
+            <Input value={schoolForm.description} onChange={(e) => setSchoolForm({ ...schoolForm, description: e.target.value })} placeholder="Short description" />
+          </Field>
+          <Field label="Status">
+            <Select value={schoolForm.status} onChange={(e) => setSchoolForm({ ...schoolForm, status: e.target.value })}>
+              <option value="Active">Active</option>
+              <option value="Inactive">Inactive</option>
+            </Select>
+          </Field>
+        </form>
+      </Modal>
 
       {!isDean && (
         <Card className="p-5 mt-6">
@@ -780,7 +1252,7 @@ export default function PrincipalDashboard() {
             {[
               { title: 'HOD & Dean', users: groupedUsers.hodDean || [] },
               { title: 'Faculty', users: groupedUsers.facultyUsers || [] },
-              { title: 'Students', users: filteredStudentUsers || [] },
+              { title: 'Students', users: paginatedStudents || [] },
             ].map((group) => (
               <div key={group.title}>
                 <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -855,6 +1327,17 @@ export default function PrincipalDashboard() {
                 ) : (
                   <EmptyState icon="●" title={group.title === 'Students' ? 'No students found' : `No ${group.title.toLowerCase()} found`} description={group.title === 'Students' ? 'No students found for this faculty.' : `No ${group.title.toLowerCase()} accounts exist yet.`} />
                 )}
+                {group.title === 'Students' && totalStudentPages > 1 && (
+                  <div className="mt-3 flex items-center justify-between gap-3">
+                    <p className="font-mono text-[11px] text-slate-400">
+                      Page {studentsPage} of {totalStudentPages} · {(filteredStudentUsers || []).length} students
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <Button size="sm" variant="outline" disabled={studentsPage <= 1} onClick={() => setStudentsPage((prev) => Math.max(1, prev - 1))}>Prev</Button>
+                      <Button size="sm" variant="outline" disabled={studentsPage >= totalStudentPages} onClick={() => setStudentsPage((prev) => Math.min(totalStudentPages, prev + 1))}>Next</Button>
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -870,6 +1353,14 @@ export default function PrincipalDashboard() {
         tone={confirm?.tone || 'danger'}
         onConfirm={confirm?.onConfirm}
       />
+    </>
+  )
+
+  return embedded ? (
+    pageContent
+  ) : (
+    <Shell role={isHod ? 'hod' : 'principal'} userName={currentUser.name || 'Admin'} department={currentUser.department || 'User Management'} navLinks={deanNav}>
+      {pageContent}
     </Shell>
   )
 }

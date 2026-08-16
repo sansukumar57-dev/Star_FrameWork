@@ -4,7 +4,8 @@ function isConfigured() {
   return Boolean(
     process.env.OPENAI_API_KEY ||
     process.env.GEMINI_API_KEY ||
-    process.env.GROQ_API_KEY
+    process.env.GROQ_API_KEY ||
+    process.env.OPENROUTER_API_KEY
   );
 }
 
@@ -12,16 +13,32 @@ function isConfigured() {
 // then falls back to whichever key is present.
 function getProvider() {
   const requested = String(process.env.AI_PROVIDER || '').toLowerCase();
+  if ((requested === 'openrouter') && process.env.OPENROUTER_API_KEY) return 'openrouter';
   if ((requested === 'openai' || requested === '') && process.env.OPENAI_API_KEY) return 'openai';
   if ((requested === 'gemini' || requested === '') && process.env.GEMINI_API_KEY) return 'gemini';
   if ((requested === 'groq' || requested === '') && process.env.GROQ_API_KEY) return 'groq';
+  if (process.env.OPENROUTER_API_KEY) return 'openrouter';
   if (process.env.OPENAI_API_KEY) return 'openai';
   if (process.env.GEMINI_API_KEY) return 'gemini';
   if (process.env.GROQ_API_KEY) return 'groq';
   return null;
 }
 
+// Build an ordered provider chain: the configured/primary provider first, then
+// every other provider with a key set, so a failure can fall through.
+function getProviderChain() {
+  const primary = getProvider();
+  if (!primary) return [];
+  const available = [];
+  if (process.env.OPENROUTER_API_KEY) available.push('openrouter');
+  if (process.env.GEMINI_API_KEY) available.push('gemini');
+  if (process.env.OPENAI_API_KEY) available.push('openai');
+  if (process.env.GROQ_API_KEY) available.push('groq');
+  return [primary, ...available.filter((provider) => provider !== primary)];
+}
+
 function providerLabel(provider = getProvider()) {
+  if (provider === 'openrouter') return 'OpenRouter';
   if (provider === 'openai') return 'OpenAI';
   if (provider === 'gemini') return 'Google Gemini';
   if (provider === 'groq') return 'Groq';
@@ -29,6 +46,7 @@ function providerLabel(provider = getProvider()) {
 }
 
 function providerModel(provider = getProvider()) {
+  if (provider === 'openrouter') return process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash';
   if (provider === 'openai') return process.env.OPENAI_MODEL || 'gpt-4o-mini';
   if (provider === 'gemini') return process.env.GEMINI_MODEL || 'gemini-2.5-flash';
   if (provider === 'groq') return process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
@@ -170,6 +188,29 @@ async function callGroq({ system, user, image, json, temperature, maxTokens, mod
   return { text: String(content), provider: 'groq', model };
 }
 
+async function callOpenRouter({ system, user, image, json, temperature, maxTokens, model, signal }) {
+  const body = buildOpenAIBody({ system, user, image, json, temperature, maxTokens, model });
+  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    signal,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+      'HTTP-Referer': 'http://localhost:5173',
+      'X-Title': 'STARS-BCA',
+    },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`OpenRouter request failed (${response.status}): ${text.slice(0, 300)}`);
+  }
+  const data = await response.json();
+  const content = data?.choices?.[0]?.message?.content;
+  if (!content) throw new Error('OpenRouter returned an empty response');
+  return { text: String(content), provider: 'openrouter', model };
+}
+
 function canHandleImage(provider, model, image) {
   if (!image?.data || image?.data.length === 0) return false;
   if (!String(image.contentType || '').startsWith('image/')) return false;
@@ -202,50 +243,57 @@ async function complete({
   timeoutMs = 30000,
   retries = 1,
 }) {
-  const provider = getProvider();
-  if (!provider) throw new Error('No AI provider configured — set OPENAI_API_KEY, GEMINI_API_KEY or GROQ_API_KEY');
-  const model = providerModel(provider);
-  const visionImage = canHandleImage(provider, model, image) ? image : null;
+  const chain = getProviderChain();
+  if (!chain.length) throw new Error('No AI provider configured — set OPENAI_API_KEY, GEMINI_API_KEY or GROQ_API_KEY');
 
-  let lastError;
-  for (let attempt = 0; attempt <= retries; attempt += 1) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      let result;
-      if (provider === 'openai') {
-        result = await callOpenAI({ system, user, image: visionImage, json, temperature, maxTokens, model, signal: controller.signal });
-      } else if (provider === 'gemini') {
-        result = await callGemini({ system, user, image: visionImage, json, temperature, maxTokens, model, signal: controller.signal });
-      } else {
-        result = await callGroq({ system, user, image: visionImage, json, temperature, maxTokens, model, signal: controller.signal });
+  let lastError = null;
+  for (const provider of chain) {
+    const model = providerModel(provider);
+    const visionImage = canHandleImage(provider, model, image) ? image : null;
+
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        let result;
+        if (provider === 'openrouter') {
+          result = await callOpenRouter({ system, user, image: visionImage, json, temperature, maxTokens, model, signal: controller.signal });
+        } else if (provider === 'openai') {
+          result = await callOpenAI({ system, user, image: visionImage, json, temperature, maxTokens, model, signal: controller.signal });
+        } else if (provider === 'gemini') {
+          result = await callGemini({ system, user, image: visionImage, json, temperature, maxTokens, model, signal: controller.signal });
+        } else {
+          result = await callGroq({ system, user, image: visionImage, json, temperature, maxTokens, model, signal: controller.signal });
+        }
+        if (json) {
+          const parsed = extractJson(result.text);
+          if (!parsed) throw new Error(`${providerLabel(provider)} returned an unparseable response`);
+          result.parsed = parsed;
+        }
+        return result;
+      } catch (error) {
+        if (error.name === 'AbortError') {
+          lastError = new Error(`${providerLabel(provider)} request timed out after ${Math.round(timeoutMs / 1000)}s`);
+        } else {
+          lastError = error;
+        }
+        if (attempt < retries) {
+          await sleep(300 * Math.pow(2, attempt));
+        }
+      } finally {
+        clearTimeout(timer);
       }
-      if (json) {
-        const parsed = extractJson(result.text);
-        if (!parsed) throw new Error(`${providerLabel(provider)} returned an unparseable response`);
-        result.parsed = parsed;
-      }
-      return result;
-    } catch (error) {
-      if (error.name === 'AbortError') {
-        lastError = new Error(`${providerLabel(provider)} request timed out after ${Math.round(timeoutMs / 1000)}s`);
-      } else {
-        lastError = error;
-      }
-      if (attempt < retries) {
-        await sleep(300 * Math.pow(2, attempt));
-      }
-    } finally {
-      clearTimeout(timer);
     }
   }
-  throw normalizeError(lastError, providerLabel(provider));
+
+  throw normalizeError(lastError, providerLabel(chain[chain.length - 1]));
 }
 
 module.exports = {
   MAX_IMAGE_BYTES,
   isConfigured,
   getProvider,
+  getProviderChain,
   providerLabel,
   providerModel,
   getConfig,

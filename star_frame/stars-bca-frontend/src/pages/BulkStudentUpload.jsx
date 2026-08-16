@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react'
 import Shell from '../components/Shell.jsx'
-import { Button, PageHeader, Card, Toast, Field, Select } from '../components/UI.jsx'
+import { Button, PageHeader, Card, Toast, Field } from '../components/UI.jsx'
 import { getLookups, bulkUploadUsers, downloadBulkTemplate, bulkAssignFaculty } from '../utils/api.js'
 import * as XLSX from 'xlsx'
 
@@ -10,9 +10,9 @@ export default function BulkStudentUpload() {
   const [schools, setSchools] = useState([])
   const [departments, setDepartments] = useState([])
   const [faculty, setFaculty] = useState([])
-  const [selectedSchoolId, setSelectedSchoolId] = useState('')
-  const [selectedDepartmentId, setSelectedDepartmentId] = useState('')
-  const [selectedFacultyId, setSelectedFacultyId] = useState('')
+  const [schoolInput, setSchoolInput] = useState('')
+  const [departmentInput, setDepartmentInput] = useState('')
+  const [facultyInput, setFacultyInput] = useState('')
   const [file, setFile] = useState(null)
   const [uploading, setUploading] = useState(false)
   const [downloadingTemplate, setDownloadingTemplate] = useState(false)
@@ -45,13 +45,9 @@ export default function BulkStudentUpload() {
 
   useEffect(() => {
     if (currentUser?.accountType !== 'hod') return
-    if (currentUser?.schoolId) {
-      setSelectedSchoolId(currentUser.schoolId)
-    }
-    if (currentUser?.departmentId) {
-      setSelectedDepartmentId(currentUser.departmentId)
-    }
-  }, [currentUser?.accountType, currentUser?.schoolId, currentUser?.departmentId])
+    if (currentUser?.school) setSchoolInput(currentUser.school)
+    if (currentUser?.department) setDepartmentInput(currentUser.department)
+  }, [currentUser?.accountType, currentUser?.school, currentUser?.department])
 
   async function loadLookups() {
     try {
@@ -128,84 +124,92 @@ export default function BulkStudentUpload() {
     reader.readAsArrayBuffer(selectedFile)
   }
 
-  async function handleConfirmUpload(event) {
-    event.preventDefault()
-    if (!file || !selectedSchoolId || !selectedDepartmentId || !selectedFacultyId) {
-      notify('Select the school, department, faculty, and Excel file before uploading.', 'error')
+  async function handleUpload(event) {
+    event?.preventDefault?.()
+    const schoolText = schoolInput.trim()
+    const departmentText = departmentInput.trim()
+    const facultyText = facultyInput.trim()
+    if (!file || !schoolText || !departmentText || !facultyText) {
+      notify('Provide the school, department, faculty (pick or type a name), and Excel file before uploading.', 'error')
       return
     }
+
+    const resolveId = (list, text) => {
+      const match = list.find((item) => String(item.name || '').trim().toLowerCase() === text.toLowerCase())
+      return match?._id || ''
+    }
+
+    const resolvedSchoolId = resolveId(schools, schoolText)
+    const resolvedDepartmentId = resolveId(departments, departmentText)
+    const resolvedFacultyId = resolveId(faculty, facultyText)
 
     try {
       setUploading(true)
       setToast(null)
       const formData = new FormData()
       formData.append('file', file)
-      formData.append('schoolId', selectedSchoolId)
-      formData.append('departmentId', selectedDepartmentId)
-      formData.append('facultyId', selectedFacultyId)
+      formData.append('schoolId', resolvedSchoolId)
+      formData.append('schoolName', schoolText)
+      formData.append('departmentId', resolvedDepartmentId)
+      formData.append('departmentName', departmentText)
+      formData.append('facultyId', resolvedFacultyId)
+      formData.append('facultyName', facultyText)
 
       const data = await bulkUploadUsers(formData)
-      setSummary(data.data || null)
-      notify('Bulk upload completed.')
+      const result = data.data || {}
+      setSummary(result)
+
+      const failed = result.failureCount || 0
+      const duplicated = result.duplicateCount || 0
+      const inserted = result.successCount || 0
+      if (failed > 0 || duplicated > 0) {
+        notify(`Upload finished with ${failed} failed and ${duplicated} duplicate row${failed + duplicated === 1 ? '' : 's'}. Review the summary below.`, 'error')
+      } else {
+        notify(`Bulk upload completed: ${inserted} student${inserted === 1 ? '' : 's'} inserted.`)
+      }
+
       setFile(null)
       setPreviewData(null)
       setShowPreview(false)
-      setSelectedSchoolId('')
-      setSelectedDepartmentId('')
-      setSelectedFacultyId('')
+      setSchoolInput('')
+      setDepartmentInput('')
+      setFacultyInput('')
     } catch (error) {
       notify(error.message || 'Unable to upload students', 'error')
     } finally {
       setUploading(false)
     }
   }
+
+  const matchedSchool = useMemo(() => {
+    const text = schoolInput.trim().toLowerCase()
+    if (!text) return null
+    return schools.find((school) => String(school.name || '').trim().toLowerCase() === text) || null
+  }, [schools, schoolInput])
 
   const visibleDepartments = useMemo(() => {
-    if (!selectedSchoolId) return departments
+    if (!matchedSchool) return departments
+    const schoolId = matchedSchool._id
     return departments.filter((department) => {
       const departmentSchoolId = department.schoolId?._id || department.schoolId || ''
-      return departmentSchoolId.toString() === selectedSchoolId.toString()
+      return departmentSchoolId.toString() === schoolId.toString()
     })
-  }, [departments, selectedSchoolId])
+  }, [departments, matchedSchool])
+
+  const matchedDepartment = useMemo(() => {
+    const text = departmentInput.trim().toLowerCase()
+    if (!text) return null
+    return visibleDepartments.find((department) => String(department.name || '').trim().toLowerCase() === text) || null
+  }, [visibleDepartments, departmentInput])
 
   const visibleFaculty = useMemo(() => {
-    if (!selectedDepartmentId) return faculty
+    if (!matchedDepartment) return faculty
+    const departmentId = matchedDepartment._id
     return faculty.filter((member) => {
       const memberDepartmentId = member.departmentId?._id || member.departmentId || ''
-      return memberDepartmentId.toString() === selectedDepartmentId.toString()
+      return memberDepartmentId.toString() === departmentId.toString()
     })
-  }, [faculty, selectedDepartmentId])
-
-  async function handleUpload(event) {
-    event.preventDefault()
-    if (!file || !selectedSchoolId || !selectedDepartmentId || !selectedFacultyId) {
-      notify('Select the school, department, faculty, and Excel file before uploading.', 'error')
-      return
-    }
-
-    try {
-      setUploading(true)
-      setToast(null)
-      const formData = new FormData()
-      formData.append('file', file)
-      formData.append('schoolId', selectedSchoolId)
-      formData.append('departmentId', selectedDepartmentId)
-      formData.append('facultyId', selectedFacultyId)
-
-      const data = await bulkUploadUsers(formData)
-      setSummary(data.data || null)
-      notify('Bulk upload completed.')
-      event.target.reset()
-      setFile(null)
-      setSelectedSchoolId('')
-      setSelectedDepartmentId('')
-      setSelectedFacultyId('')
-    } catch (error) {
-      notify(error.message || 'Unable to upload students', 'error')
-    } finally {
-      setUploading(false)
-    }
-  }
+  }, [faculty, matchedDepartment])
 
   async function handleDownloadTemplate() {
     setDownloadingTemplate(true)
@@ -230,8 +234,14 @@ export default function BulkStudentUpload() {
       const formData = new FormData()
       formData.append('file', assignFile)
       const data = await bulkAssignFaculty(formData)
-      setAssignSummary(data.data || null)
-      notify(`Faculty assignment completed: ${data.data?.successCount || 0} assigned.`)
+      const result = data.data || {}
+      setAssignSummary(result)
+      const failed = (result.failureCount || 0) + (result.notFoundCount || 0)
+      if (failed > 0) {
+        notify(`Faculty assignment finished with ${failed} row${failed === 1 ? '' : 's'} not assigned. Review the summary below.`, 'error')
+      } else {
+        notify(`Faculty assignment completed: ${result.successCount || 0} assigned.`)
+      }
       event.target.reset()
       setAssignFile(null)
     } catch (error) {
@@ -270,36 +280,47 @@ export default function BulkStudentUpload() {
         <Card className="p-6">
           <form onSubmit={handleUpload} className="space-y-5">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <Field label="Recommended School">
-                <Select value={selectedSchoolId} onChange={(event) => {
-                  setSelectedSchoolId(event.target.value)
-                  setSelectedDepartmentId('')
-                  setSelectedFacultyId('')
-                }}>
-                  <option value="">Select school</option>
-                  {schools.map((school) => <option key={school._id} value={school._id}>{school.name}</option>)}
-                </Select>
+              <Field label="School" hint="Pick from the list or type a new name">
+                <input
+                  list="bulk-school-options"
+                  value={schoolInput}
+                  onChange={(event) => setSchoolInput(event.target.value)}
+                  placeholder="e.g. STAR"
+                  className="block w-full rounded-md border border-rule bg-card px-3 py-2 text-sm text-ink placeholder:text-slate-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-400"
+                />
+                <datalist id="bulk-school-options">
+                  {schools.map((school) => <option key={school._id} value={school.name} />)}
+                </datalist>
               </Field>
-              <Field label="Recommended Department">
-                <Select value={selectedDepartmentId} onChange={(event) => {
-                  setSelectedDepartmentId(event.target.value)
-                  setSelectedFacultyId('')
-                }} disabled={!selectedSchoolId}>
-                  <option value="">Select department</option>
-                  {visibleDepartments.map((department) => <option key={department._id} value={department._id}>{department.name}</option>)}
-                </Select>
+              <Field label="Department" hint="Pick from the list or type a new name">
+                <input
+                  list="bulk-department-options"
+                  value={departmentInput}
+                  onChange={(event) => setDepartmentInput(event.target.value)}
+                  placeholder={matchedSchool ? 'e.g. Computer Science' : 'Select a school first'}
+                  className="block w-full rounded-md border border-rule bg-card px-3 py-2 text-sm text-ink placeholder:text-slate-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-400"
+                />
+                <datalist id="bulk-department-options">
+                  {visibleDepartments.map((department) => <option key={department._id} value={department.name} />)}
+                </datalist>
               </Field>
-              <Field label="Recommended Faculty">
-                <Select value={selectedFacultyId} onChange={(event) => setSelectedFacultyId(event.target.value)} disabled={!selectedDepartmentId}>
-                  <option value="">Select faculty</option>
-                  {visibleFaculty.map((member) => <option key={member._id} value={member._id}>{member.name}</option>)}
-                </Select>
+              <Field label="Faculty" hint="Existing faculty account required">
+                <input
+                  list="bulk-faculty-options"
+                  value={facultyInput}
+                  onChange={(event) => setFacultyInput(event.target.value)}
+                  placeholder={matchedDepartment ? 'e.g. Priya Sharma' : 'Select a department first'}
+                  className="block w-full rounded-md border border-rule bg-card px-3 py-2 text-sm text-ink placeholder:text-slate-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-400"
+                />
+                <datalist id="bulk-faculty-options">
+                  {visibleFaculty.map((member) => <option key={member._id} value={member.name} />)}
+                </datalist>
               </Field>
             </div>
 
             <Field label="Excel file" hint="Only .xlsx and .xls files are accepted.">
-              <label className="flex flex-col items-center justify-center rounded-md border border-dashed border-rule bg-paper px-6 py-8 text-center cursor-pointer hover:border-brand-500 transition-colors">
-                <input type="file" accept=".xlsx,.xls" className="hidden" onChange={handleFileSelect} />
+              <label className="flex flex-col items-center justify-center rounded-md border border-dashed border-rule bg-paper px-6 py-8 text-center cursor-pointer hover:border-brand-500 focus-within:ring-2 focus-within:ring-brand-400 focus-within:border-brand-500 transition-colors">
+                <input type="file" accept=".xlsx,.xls" className="sr-only" onChange={handleFileSelect} />
                 {file ? (
                   <>
                     <span className="flex h-10 w-10 items-center justify-center rounded-md border border-leaf-200 bg-leaf-100/60 font-mono text-sm text-leaf-600">✓</span>
@@ -317,7 +338,7 @@ export default function BulkStudentUpload() {
             </Field>
 
             {!showPreview && (
-              <Button type="submit" loading={uploading} disabled={!file || !selectedSchoolId || !selectedDepartmentId || !selectedFacultyId} className="w-full md:w-auto">
+              <Button type="submit" loading={uploading} disabled={!file || !schoolInput.trim() || !departmentInput.trim() || !facultyInput.trim()} className="w-full md:w-auto">
                 {uploading ? 'Uploading…' : 'Upload Students'}
               </Button>
             )}
@@ -394,7 +415,7 @@ export default function BulkStudentUpload() {
             )}
 
             <div className="mt-5 flex items-center gap-3">
-              <Button onClick={handleConfirmUpload} loading={uploading} disabled={!selectedSchoolId || !selectedDepartmentId || !selectedFacultyId || previewData.rows.some((r) => !r.valid)} className="w-full md:w-auto">
+              <Button onClick={handleUpload} loading={uploading} disabled={!schoolInput.trim() || !departmentInput.trim() || !facultyInput.trim() || previewData.rows.some((r) => !r.valid)} className="w-full md:w-auto">
                 {uploading ? 'Uploading…' : 'Confirm Upload'}
               </Button>
               <Button variant="outline" onClick={() => { setFile(null); setPreviewData(null); setShowPreview(false); }} className="w-full md:w-auto">
@@ -407,6 +428,16 @@ export default function BulkStudentUpload() {
         {summary && (
           <Card className="p-6">
             <h2 className="font-display text-lg font-semibold text-ink">Upload Summary</h2>
+            {(summary.failureCount || 0) > 0 || (summary.duplicateCount || 0) > 0 ? (
+              <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700" role="alert">
+                <p className="font-semibold text-rose-800">{(summary.failureCount || 0) + (summary.duplicateCount || 0)} row{(summary.failureCount || 0) + (summary.duplicateCount || 0) === 1 ? '' : 's'} were not inserted.</p>
+                <p className="mt-1">{(summary.failureCount || 0)} failed and {(summary.duplicateCount || 0)} duplicate{(summary.duplicateCount || 0) === 1 ? '' : 's'} found. Review the rows below and re-upload the corrected file.</p>
+              </div>
+            ) : (
+              <div className="mt-3 rounded-md border border-leaf-200 bg-leaf-100/60 p-4 text-sm text-leaf-700" role="status">
+                All {(summary.successCount || 0)} row{(summary.successCount || 0) === 1 ? '' : 's'} were inserted successfully.
+              </div>
+            )}
             <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3">
               <div className="rounded-md border border-rule bg-card p-4">
                 <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-slate-400">Total rows</p>
@@ -452,8 +483,8 @@ export default function BulkStudentUpload() {
           </div>
           <form onSubmit={handleAssignUpload} className="mt-5 space-y-5">
             <Field label="Faculty assignment Excel file" hint="Only .xlsx and .xls files are accepted.">
-              <label className="flex flex-col items-center justify-center rounded-md border border-dashed border-rule bg-paper px-6 py-8 text-center cursor-pointer hover:border-brand-500 transition-colors">
-                <input type="file" accept=".xlsx,.xls" className="hidden" onChange={(event) => setAssignFile(event.target.files?.[0] || null)} />
+              <label className="flex flex-col items-center justify-center rounded-md border border-dashed border-rule bg-paper px-6 py-8 text-center cursor-pointer hover:border-brand-500 focus-within:ring-2 focus-within:ring-brand-400 focus-within:border-brand-500 transition-colors">
+                <input type="file" accept=".xlsx,.xls" className="sr-only" onChange={(event) => setAssignFile(event.target.files?.[0] || null)} />
                 {assignFile ? (
                   <>
                     <span className="flex h-10 w-10 items-center justify-center rounded-md border border-leaf-200 bg-leaf-100/60 font-mono text-sm text-leaf-600">✓</span>
